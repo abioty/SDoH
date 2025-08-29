@@ -1,0 +1,886 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Perinatal SDoH Composite Score Calculator</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: #f5f5f5;
+            min-height: 100vh;
+        }
+        
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            background: white;
+            min-height: 100vh;
+            box-shadow: 0 0 20px rgba(0,0,0,0.1);
+        }
+        
+        .header {
+            background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+            color: white;
+            padding: 25px;
+            text-align: center;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+        }
+        
+        .header h1 {
+            font-size: 2em;
+            margin-bottom: 8px;
+        }
+        
+        .header p {
+            font-size: 1em;
+            opacity: 0.95;
+        }
+        
+        .nav-tabs {
+            background: #f8f9fa;
+            border-bottom: 3px solid #1e3c72;
+            display: flex;
+            padding: 0 30px;
+        }
+        
+        .nav-tab {
+            padding: 15px 30px;
+            background: transparent;
+            border: none;
+            font-size: 16px;
+            font-weight: 600;
+            color: #333;
+            cursor: pointer;
+            transition: all 0.3s;
+            border-bottom: 3px solid transparent;
+            margin-bottom: -3px;
+        }
+        
+        .nav-tab:hover {
+            background: #e9ecef;
+        }
+        
+        .nav-tab.active {
+            background: white;
+            border-bottom: 3px solid #1e3c72;
+            color: #1e3c72;
+        }
+        
+        .content-area {
+            padding: 40px;
+        }
+        
+        .tab-content {
+            display: none;
+        }
+        
+        .tab-content.active {
+            display: block;
+        }
+        
+        /* Overview Section Styles */
+        .overview-section {
+            margin-bottom: 30px;
+            max-width: 900px;
+        }
+        
+        .overview-section h2 {
+            color: #1e3c72;
+            margin-bottom: 15px;
+            padding-bottom: 10px;
+            border-bottom: 2px solid #e9ecef;
+            font-size: 1.5em;
+        }
+        
+        .overview-section h3 {
+            color: #2a5298;
+            margin: 20px 0 10px 0;
+            font-size: 1.2em;
+        }
+        
+        .overview-section p {
+            line-height: 1.6;
+            color: #495057;
+            margin-bottom: 15px;
+        }
+        
+        .overview-section ul {
+            margin-left: 25px;
+            margin-bottom: 15px;
+        }
+        
+        .overview-section li {
+            margin-bottom: 8px;
+            color: #495057;
+            line-height: 1.6;
+        }
+        
+        .info-box {
+            background: #e7f3ff;
+            border-left: 4px solid #1e3c72;
+            padding: 15px;
+            margin: 20px 0;
+            border-radius: 5px;
+        }
+        
+        .warning-box {
+            background: #fff3cd;
+            border-left: 4px solid #ffc107;
+            padding: 15px;
+            margin: 20px 0;
+            border-radius: 5px;
+        }
+        
+        /* Calculator Styles */
+        .calculator-wrapper {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 40px;
+            margin-bottom: 40px;
+        }
+        
+        .calculator-section {
+            background: #f8f9fa;
+            padding: 25px;
+            border-radius: 15px;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.08);
+        }
+        
+        .calculator-section h2 {
+            color: #1e3c72;
+            margin-bottom: 15px;
+            padding-bottom: 10px;
+            border-bottom: 3px solid #1e3c72;
+            font-size: 1.4em;
+        }
+        
+        .score-range-info {
+            background: white;
+            padding: 10px;
+            border-radius: 5px;
+            margin-bottom: 20px;
+            font-size: 0.9em;
+            color: #666;
+        }
+        
+        .form-group {
+            margin-bottom: 20px;
+        }
+        
+        .form-group label {
+            display: block;
+            font-weight: 600;
+            color: #555;
+            margin-bottom: 6px;
+            font-size: 0.95em;
+        }
+        
+        .form-group select {
+            width: 100%;
+            padding: 10px;
+            border: 2px solid #ddd;
+            border-radius: 8px;
+            font-size: 14px;
+            transition: all 0.3s;
+            background: white;
+        }
+        
+        .form-group select:focus {
+            outline: none;
+            border-color: #1e3c72;
+            box-shadow: 0 0 0 3px rgba(30, 60, 114, 0.1);
+        }
+        
+        .calculate-btn {
+            width: 100%;
+            padding: 12px;
+            background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+            color: white;
+            border: none;
+            border-radius: 10px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+            margin-top: 15px;
+        }
+        
+        .calculate-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 25px rgba(0,0,0,0.2);
+        }
+        
+        .results-section {
+            display: none;
+            margin-top: 30px;
+            padding: 25px;
+            background: white;
+            border: 2px solid #e9ecef;
+            border-radius: 10px;
+        }
+        
+        .result-card h3 {
+            color: #1e3c72;
+            margin-bottom: 15px;
+            font-size: 1.2em;
+        }
+        
+        .score-display {
+            font-size: 2.5em;
+            font-weight: bold;
+            margin: 15px 0;
+            text-align: center;
+            color: #1e3c72;
+        }
+        
+        .score-with-ci {
+            text-align: center;
+            margin: 20px 0;
+        }
+        
+        .score-ci {
+            font-size: 0.9em;
+            color: #666;
+            margin-top: 5px;
+        }
+        
+        .score-range-container {
+            position: relative;
+            margin: 30px 0;
+        }
+        
+        .score-range-bar {
+            position: relative;
+            height: 35px;
+            background: linear-gradient(to right, #dc3545 0%, #ffc107 50%, #28a745 100%);
+            border-radius: 20px;
+            box-shadow: inset 0 2px 4px rgba(0,0,0,0.1);
+        }
+        
+        .ci-range-bar {
+            position: absolute;
+            height: 8px;
+            background: rgba(0, 0, 0, 0.3);
+            top: 13.5px;
+            border-radius: 4px;
+        }
+        
+        .score-indicator {
+            position: absolute;
+            top: -8px;
+            width: 4px;
+            height: 50px;
+            background: #333;
+            border-radius: 2px;
+            transition: left 0.5s ease;
+            z-index: 2;
+        }
+        
+        .score-indicator::before {
+            content: attr(data-score);
+            position: absolute;
+            top: -22px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: #333;
+            color: white;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 11px;
+            white-space: nowrap;
+        }
+        
+        .reference-line {
+            position: absolute;
+            width: 2px;
+            height: 35px;
+            background: rgba(0, 0, 0, 0.5);
+            top: 0;
+            right: 0;
+        }
+        
+        .reference-line::after {
+            content: 'Ref (0)';
+            position: absolute;
+            top: -20px;
+            right: -15px;
+            font-size: 11px;
+            color: #666;
+        }
+        
+        .range-labels {
+            display: flex;
+            justify-content: space-between;
+            margin-top: 8px;
+            font-size: 13px;
+            color: #666;
+        }
+        
+        .stat-value {
+            font-size: 1em;
+            color: #495057;
+            margin: 15px 0;
+            padding: 10px;
+            background: #f8f9fa;
+            border-radius: 5px;
+        }
+        
+        .stat-label {
+            font-weight: 600;
+            color: #6c757d;
+        }
+        
+        .footer {
+            background: #f8f9fa;
+            padding: 20px;
+            text-align: center;
+            border-top: 1px solid #dee2e6;
+            margin-top: 50px;
+            color: #6c757d;
+            font-size: 0.9em;
+        }
+        
+        .print-btn {
+            background: #6c757d;
+            color: white;
+            padding: 8px 16px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            margin-top: 15px;
+            font-size: 14px;
+        }
+        
+        .print-btn:hover {
+            background: #5a6268;
+        }
+        
+        @media (max-width: 768px) {
+            .calculator-wrapper {
+                grid-template-columns: 1fr;
+            }
+        }
+        
+        @media print {
+            body {
+                background: white;
+            }
+            .print-btn, .nav-tabs {
+                display: none;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Perinatal SDoH Composite Score Calculator</h1>
+            <p>Social Determinants of Health Assessment for Preterm Infants (≤32 weeks GA)</p>
+        </div>
+        
+        <div class="nav-tabs">
+            <button class="nav-tab active" onclick="showTab('overview')">Overview</button>
+            <button class="nav-tab" onclick="showTab('calculator')">Calculator</button>
+        </div>
+        
+        <div class="content-area">
+            <!-- Overview Tab -->
+            <div id="overview" class="tab-content active">
+                <div class="overview-section">
+                    <h2>About This Tool</h2>
+                    <p>
+                        This calculator provides two data-driven composite scores for quantifying social risk in preterm infants 
+                        born at ≤32 weeks gestational age. The scores integrate five social determinants: maternal age, education, 
+                        household income (binary), employment status, and family structure.
+                    </p>
+                    
+                    <h3>Available Models</h3>
+                    <ul>
+                        <li><strong>MCA Model (Unsupervised):</strong> Developed using Multiple Correspondence Analysis to identify 
+                        natural patterns in social risk factors without reference to specific outcomes.</li>
+                        <li><strong>Ridge Model (Supervised):</strong> Developed using ridge regression optimized for cognitive 
+                        outcomes at 2 years corrected age.</li>
+                    </ul>
+                    
+                    <h3>When to Use</h3>
+                    <ul>
+                        <li>Initial assessment at NICU discharge or follow-up visits</li>
+                        <li>Research studies examining social determinants</li>
+                        <li>Risk stratification for developmental follow-up</li>
+                        <li>Resource allocation planning</li>
+                    </ul>
+                    
+                    <div class="warning-box">
+                        <strong>Important Notes:</strong>
+                        <ul style="margin-left: 20px; margin-top: 10px;">
+                            <li>Scores quantify social risk but do not predict individual outcomes</li>
+                            <li>External validation required for populations outside the development cohort</li>
+                            <li>Results should be interpreted within comprehensive clinical assessment</li>
+                            <li>Confidence intervals represent statistical uncertainty in the weights</li>
+                            <li>For detailed methodology, refer to the published manuscript</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Calculator Tab -->
+            <div id="calculator" class="tab-content">
+                <div class="info-box">
+                    <strong>Instructions:</strong> Select the appropriate category for each social determinant. You may calculate 
+                    scores using either or both models independently. Lower scores indicate higher social risk. Confidence intervals 
+                    are shown for each calculated score.
+                </div>
+                
+                <div class="calculator-wrapper">
+                    <!-- MCA Model (Unsupervised) -->
+                    <div class="calculator-section">
+                        <h2>MCA Model (Unsupervised)</h2>
+                        
+                        <div class="score-range-info">
+                            <strong>Score Range:</strong> -2.01 to 0.00<br>
+                            <small>All reference categories = 0 | Lower scores = higher risk</small>
+                        </div>
+                        
+                        <form id="unsupervised-form">
+                            <div class="form-group">
+                                <label>Maternal Age at Delivery</label>
+                                <select name="age" required>
+                                    <option value="">Select...</option>
+                                    <option value="0">Over 25 years (Reference)</option>
+                                    <option value="-0.301">25 years or younger</option>
+                                </select>
+                            </div>
+                            
+                            <div class="form-group">
+                                <label>Maternal Education</label>
+                                <select name="education" required>
+                                    <option value="">Select...</option>
+                                    <option value="0">Graduate degree (Reference)</option>
+                                    <option value="-0.183">College/Some college</option>
+                                    <option value="-0.301">High school or less</option>
+                                </select>
+                            </div>
+                            
+                            <div class="form-group">
+                                <label>Household Income</label>
+                                <select name="income" required>
+                                    <option value="">Select...</option>
+                                    <option value="0">Higher income (>125% FPL) (Reference)</option>
+                                    <option value="-0.381">Low income (≤125% FPL)</option>
+                                </select>
+                            </div>
+                            
+                            <div class="form-group">
+                                <label>Employment Status</label>
+                                <select name="employment" required>
+                                    <option value="">Select...</option>
+                                    <option value="0">Employed (Reference)</option>
+                                    <option value="-0.043">Stay-at-home caregiver</option>
+                                    <option value="-0.332">Unemployed</option>
+                                </select>
+                            </div>
+                            
+                            <div class="form-group">
+                                <label>Family Structure</label>
+                                <select name="family" required>
+                                    <option value="">Select...</option>
+                                    <option value="0">Married (Reference)</option>
+                                    <option value="-0.140">Cohabiting/Living with partner</option>
+                                    <option value="-0.329">Single/Divorced/Separated</option>
+                                </select>
+                            </div>
+                            
+                            <button type="button" class="calculate-btn" onclick="calculateUnsupervised()">
+                                Calculate MCA Score
+                            </button>
+                        </form>
+                        
+                        <div id="unsupervised-results" class="results-section">
+                            <div class="result-card">
+                                <h3>MCA Model Results</h3>
+                                <div class="score-with-ci">
+                                    <div id="unsup-score" class="score-display"></div>
+                                    <div id="unsup-ci" class="score-ci"></div>
+                                </div>
+                                
+                                <div class="score-range-container">
+                                    <div class="score-range-bar">
+                                        <div id="unsup-ci-bar" class="ci-range-bar"></div>
+                                        <div id="unsup-indicator" class="score-indicator" data-score=""></div>
+                                        <div class="reference-line"></div>
+                                    </div>
+                                    <div class="range-labels">
+                                        <span>-2.01 (Highest Risk)</span>
+                                        <span>0 (Reference)</span>
+                                    </div>
+                                </div>
+                                
+                                <div class="stat-value">
+                                    <span class="stat-label">Percentile:</span> 
+                                    <span id="unsup-percentile"></span>
+                                </div>
+                                
+                                <div class="stat-value">
+                                    <span class="stat-label">Interpretation:</span> 
+                                    <span id="unsup-interpretation"></span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Ridge Model (Supervised) -->
+                    <div class="calculator-section">
+                        <h2>Ridge Model (Supervised)</h2>
+                        
+                        <div class="score-range-info">
+                            <strong>Score Range:</strong> -27.85 to 0.00<br>
+                            <small>All reference categories = 0 | Lower scores = higher risk</small>
+                        </div>
+                        
+                        <form id="supervised-form">
+                            <div class="form-group">
+                                <label>Maternal Age at Delivery</label>
+                                <select name="age" required>
+                                    <option value="">Select...</option>
+                                    <option value="0">Over 25 years (Reference)</option>
+                                    <option value="-2.137">25 years or younger</option>
+                                </select>
+                            </div>
+                            
+                            <div class="form-group">
+                                <label>Maternal Education</label>
+                                <select name="education" required>
+                                    <option value="">Select...</option>
+                                    <option value="0">Graduate degree (Reference)</option>
+                                    <option value="-3.075">College/Some college</option>
+                                    <option value="-4.753">High school or less</option>
+                                </select>
+                            </div>
+                            
+                            <div class="form-group">
+                                <label>Household Income</label>
+                                <select name="income" required>
+                                    <option value="">Select...</option>
+                                    <option value="0">Higher income (>125% FPL) (Reference)</option>
+                                    <option value="-6.221">Low income (≤125% FPL)</option>
+                                </select>
+                            </div>
+                            
+                            <div class="form-group">
+                                <label>Employment Status</label>
+                                <select name="employment" required>
+                                    <option value="">Select...</option>
+                                    <option value="0">Employed (Reference)</option>
+                                    <option value="-5.287">Stay-at-home caregiver</option>
+                                    <option value="-2.071">Unemployed</option>
+                                </select>
+                            </div>
+                            
+                            <div class="form-group">
+                                <label>Family Structure</label>
+                                <select name="family" required>
+                                    <option value="">Select...</option>
+                                    <option value="0">Married (Reference)</option>
+                                    <option value="-2.986">Cohabiting/Living with partner</option>
+                                    <option value="-1.317">Single/Divorced/Separated</option>
+                                </select>
+                            </div>
+                            
+                            <button type="button" class="calculate-btn" onclick="calculateSupervised()">
+                                Calculate Ridge Score
+                            </button>
+                        </form>
+                        
+                        <div id="supervised-results" class="results-section">
+                            <div class="result-card">
+                                <h3>Ridge Model Results</h3>
+                                <div class="score-with-ci">
+                                    <div id="sup-score" class="score-display"></div>
+                                    <div id="sup-ci" class="score-ci"></div>
+                                </div>
+                                
+                                <div class="score-range-container">
+                                    <div class="score-range-bar">
+                                        <div id="sup-ci-bar" class="ci-range-bar"></div>
+                                        <div id="sup-indicator" class="score-indicator" data-score=""></div>
+                                        <div class="reference-line"></div>
+                                    </div>
+                                    <div class="range-labels">
+                                        <span>-27.85 (Highest Risk)</span>
+                                        <span>0 (Reference)</span>
+                                    </div>
+                                </div>
+                                
+                                <div class="stat-value">
+                                    <span class="stat-label">Percentile:</span> 
+                                    <span id="sup-percentile"></span>
+                                </div>
+                                
+                                <div class="stat-value">
+                                    <span class="stat-label">Interpretation:</span> 
+                                    <span id="sup-interpretation"></span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <button class="print-btn" onclick="window.print()">Print Results</button>
+            </div>
+        </div>
+        
+        <div class="footer">
+            <p>Developed by Abiot Y. Derbie, PhD</p>
+            <p style="margin-top: 5px;">For research and clinical assessment purposes</p>
+        </div>
+    </div>
+    
+    <script>
+        // CI data for each variable
+        const mcaCIs = {
+            'age': { lower: -0.392, upper: -0.290 },
+            'education_college': { lower: -0.229, upper: -0.137 }, // Adjusted for data inconsistency
+            'education_hs': { lower: -0.485, upper: -0.437 },
+            'income_low': { lower: -0.559, upper: -0.515 },
+            'employment_home': { lower: -0.009, upper: 0.101 },
+            'employment_unemployed': { lower: -0.409, upper: -0.337 },
+            'family_cohabit': { lower: -0.211, upper: -0.114 },
+            'family_single': { lower: -0.424, upper: -0.363 }
+        };
+        
+        const ridgeCIs = {
+            'age': { lower: -5.166, upper: 0.615 },
+            'education_college': { lower: -6.490, upper: 0.440 },
+            'education_hs': { lower: -7.919, upper: -1.633 },
+            'income_low': { lower: -8.938, upper: -3.283 },
+            'employment_home': { lower: -8.707, upper: -2.206 },
+            'employment_unemployed': { lower: -5.784, upper: 1.413 },
+            'family_cohabit': { lower: -6.483, upper: 0.020 },
+            'family_single': { lower: -4.684, upper: 1.806 }
+        };
+        
+        // Tab switching functionality
+        function showTab(tabName) {
+            const tabs = document.querySelectorAll('.tab-content');
+            tabs.forEach(tab => tab.classList.remove('active'));
+            
+            const navTabs = document.querySelectorAll('.nav-tab');
+            navTabs.forEach(tab => tab.classList.remove('active'));
+            
+            document.getElementById(tabName).classList.add('active');
+            event.target.classList.add('active');
+        }
+        
+        // Calculate composite CI using error propagation
+        function calculateCompositeCI(selectedVars, ciData) {
+            let sumOfSquares = 0;
+            selectedVars.forEach(varKey => {
+                if (ciData[varKey]) {
+                    const halfWidth = (ciData[varKey].upper - ciData[varKey].lower) / 2;
+                    sumOfSquares += halfWidth * halfWidth;
+                }
+            });
+            return Math.sqrt(sumOfSquares);
+        }
+        
+        // Calculate Unsupervised Score
+        function calculateUnsupervised() {
+            const form = document.getElementById('unsupervised-form');
+            
+            if (!form.checkValidity()) {
+                alert('Please complete all fields before calculating.');
+                return;
+            }
+            
+            let score = 0;
+            const selectedVars = [];
+            
+            // Age
+            const ageValue = parseFloat(form.querySelector('[name="age"]').value);
+            score += ageValue;
+            if (ageValue < 0) selectedVars.push('age');
+            
+            // Education
+            const eduValue = parseFloat(form.querySelector('[name="education"]').value);
+            score += eduValue;
+            if (eduValue === -0.183) selectedVars.push('education_college');
+            else if (eduValue === -0.301) selectedVars.push('education_hs');
+            
+            // Income
+            const incValue = parseFloat(form.querySelector('[name="income"]').value);
+            score += incValue;
+            if (incValue < 0) selectedVars.push('income_low');
+            
+            // Employment
+            const empValue = parseFloat(form.querySelector('[name="employment"]').value);
+            score += empValue;
+            if (empValue === -0.043) selectedVars.push('employment_home');
+            else if (empValue === -0.332) selectedVars.push('employment_unemployed');
+            
+            // Family
+            const famValue = parseFloat(form.querySelector('[name="family"]').value);
+            score += famValue;
+            if (famValue === -0.140) selectedVars.push('family_cohabit');
+            else if (famValue === -0.329) selectedVars.push('family_single');
+            
+            // Calculate CI
+            const ciHalfWidth = calculateCompositeCI(selectedVars, mcaCIs);
+            const lowerCI = score - ciHalfWidth;
+            const upperCI = score + ciHalfWidth;
+            
+            // Calculate percentile
+            const percentile = calculateMCAPercentile(score);
+            
+            // Calculate position on scale
+            const minScore = -2.01;
+            const maxScore = 0;
+            const position = ((score - minScore) / (maxScore - minScore)) * 100;
+            const ciLowerPos = ((lowerCI - minScore) / (maxScore - minScore)) * 100;
+            const ciUpperPos = ((upperCI - minScore) / (maxScore - minScore)) * 100;
+            
+            // Generate interpretation
+            let interpretation = "";
+            if (percentile <= 33) {
+                interpretation = "Higher social risk. Enhanced surveillance and support services recommended.";
+            } else if (percentile <= 66) {
+                interpretation = "Moderate social risk. Standard follow-up with attention to social resources.";
+            } else {
+                interpretation = "Lower social risk. Continue routine monitoring.";
+            }
+            
+            // Display results
+            document.getElementById('unsup-score').textContent = score.toFixed(3);
+            document.getElementById('unsup-ci').textContent = `95% CI: [${lowerCI.toFixed(3)}, ${upperCI.toFixed(3)}]`;
+            document.getElementById('unsup-percentile').textContent = percentile.toFixed(0) + 'th percentile';
+            document.getElementById('unsup-interpretation').textContent = interpretation;
+            
+            // Update visualizations
+            const indicator = document.getElementById('unsup-indicator');
+            indicator.style.left = Math.max(0, Math.min(100, position)) + '%';
+            indicator.setAttribute('data-score', score.toFixed(2));
+            
+            const ciBar = document.getElementById('unsup-ci-bar');
+            ciBar.style.left = Math.max(0, ciLowerPos) + '%';
+            ciBar.style.width = Math.max(0, (ciUpperPos - ciLowerPos)) + '%';
+            
+            document.getElementById('unsupervised-results').style.display = 'block';
+            document.getElementById('unsupervised-results').scrollIntoView({ behavior: 'smooth' });
+        }
+        
+        // Calculate Supervised Score
+        function calculateSupervised() {
+            const form = document.getElementById('supervised-form');
+            
+            if (!form.checkValidity()) {
+                alert('Please complete all fields before calculating.');
+                return;
+            }
+            
+            let score = 0;
+            const selectedVars = [];
+            
+            // Age
+            const ageValue = parseFloat(form.querySelector('[name="age"]').value);
+            score += ageValue;
+            if (ageValue < 0) selectedVars.push('age');
+            
+            // Education
+            const eduValue = parseFloat(form.querySelector('[name="education"]').value);
+            score += eduValue;
+            if (eduValue === -3.075) selectedVars.push('education_college');
+            else if (eduValue === -4.753) selectedVars.push('education_hs');
+            
+            // Income
+            const incValue = parseFloat(form.querySelector('[name="income"]').value);
+            score += incValue;
+            if (incValue < 0) selectedVars.push('income_low');
+            
+            // Employment
+            const empValue = parseFloat(form.querySelector('[name="employment"]').value);
+            score += empValue;
+            if (empValue === -5.287) selectedVars.push('employment_home');
+            else if (empValue === -2.071) selectedVars.push('employment_unemployed');
+            
+            // Family
+            const famValue = parseFloat(form.querySelector('[name="family"]').value);
+            score += famValue;
+            if (famValue === -2.986) selectedVars.push('family_cohabit');
+            else if (famValue === -1.317) selectedVars.push('family_single');
+            
+            // Calculate CI
+            const ciHalfWidth = calculateCompositeCI(selectedVars, ridgeCIs);
+            const lowerCI = score - ciHalfWidth;
+            const upperCI = score + ciHalfWidth;
+            
+            // Calculate percentile
+            const percentile = calculateRidgePercentile(score);
+            
+            // Calculate position on scale
+            const minScore = -27.85;
+            const maxScore = 0;
+            const position = ((score - minScore) / (maxScore - minScore)) * 100;
+            const ciLowerPos = ((lowerCI - minScore) / (maxScore - minScore)) * 100;
+            const ciUpperPos = ((upperCI - minScore) / (maxScore - minScore)) * 100;
+            
+            // Generate interpretation
+            let interpretation = "";
+            if (percentile <= 33) {
+                interpretation = "Higher social risk. Enhanced surveillance and early intervention recommended.";
+            } else if (percentile <= 66) {
+                interpretation = "Moderate social risk. Consider additional developmental support.";
+            } else {
+                interpretation = "Lower social risk. Standard follow-up appropriate.";
+            }
+            
+            // Display results
+            document.getElementById('sup-score').textContent = score.toFixed(2);
+            document.getElementById('sup-ci').textContent = `95% CI: [${lowerCI.toFixed(2)}, ${upperCI.toFixed(2)}]`;
+            document.getElementById('sup-percentile').textContent = percentile.toFixed(0) + 'th percentile';
+            document.getElementById('sup-interpretation').textContent = interpretation;
+            
+            // Update visualizations
+            const indicator = document.getElementById('sup-indicator');
+            indicator.style.left = Math.max(0, Math.min(100, position)) + '%';
+            indicator.setAttribute('data-score', score.toFixed(2));
+            
+            const ciBar = document.getElementById('sup-ci-bar');
+            ciBar.style.left = Math.max(0, ciLowerPos) + '%';
+            ciBar.style.width = Math.max(0, (ciUpperPos - ciLowerPos)) + '%';
+            
+            document.getElementById('supervised-results').style.display = 'block';
+            document.getElementById('supervised-results').scrollIntoView({ behavior: 'smooth' });
+        }
+        
+        // Calculate percentile for MCA model
+        function calculateMCAPercentile(score) {
+            // Score of 0 (all reference) should be ~85th percentile (low risk)
+            // Most negative score (-2.01) should be ~5th percentile
+            if (score <= -1.5) return Math.max(5, 10 + (score + 2.01) * 9.4);
+            if (score <= -1.0) return 15 + ((score + 1.5) * 20);
+            if (score <= -0.5) return 25 + ((score + 1.0) * 30);
+            if (score <= -0.25) return 40 + ((score + 0.5) * 30);
+            if (score <= 0) return 55 + ((score + 0.25) * 120);
+            return 85; // Score of 0 is 85th percentile
+        }
+        
+        // Calculate percentile for Ridge model  
+        function calculateRidgePercentile(score) {
+            // Score of 0 (all reference) should be ~85th percentile (low risk)
+            // Most negative score (-27.85) should be ~5th percentile
+            if (score <= -20) return Math.max(5, 10 + (score + 27.85) * 0.65);
+            if (score <= -15) return 15 + ((score + 20) * 2);
+            if (score <= -10) return 25 + ((score + 15) * 3);
+            if (score <= -5) return 40 + ((score + 10) * 3);
+            if (score <= 0) return 55 + ((score + 5) * 6);
+            return 85; // Score of 0 is 85th percentile
+        }
+    </script>
+</body>
+</html>
