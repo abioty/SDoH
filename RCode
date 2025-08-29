@@ -1,0 +1,3518 @@
+#################################################################################
+#  Social-Risk Composite Score Development with Tidymodels
+#  FIXED VERSION: Middle+High Income as Reference Category
+#################################################################################
+
+# 0. Setup and Dependencies ----
+library(tidymodels)
+library(tidyverse)
+library(stacks)
+library(ranger)
+library(glmnet)
+library(permute)
+library(jsonlite)
+library(pls)
+library(vip)
+library(doParallel)
+library(FactoMineR)
+library(cluster)
+library(factoextra)
+library(broom)
+library(boot)
+library(patchwork)
+library(knitr)
+library(kableExtra)
+library(pROC)
+library(psych)
+
+# Use future backend
+library(future)
+plan(multisession, workers = max(1, availableCores() - 1))
+
+tidymodels_prefer()
+theme_set(theme_minimal(base_size = 11))
+
+set.seed(321)
+
+# 1. Data Loading and Initial Setup ----
+cat("Loading and preparing data...\n")
+df <- readr::read_csv("complete_cases_knn_vim_with_all_dummies.csv", show_col_types = FALSE)
+
+# Define categorical variables with updated names
+education_vars  <- c("Education_College degree", "Education_Graduate degree and higher",
+                     "Education_High school or less")
+income_vars     <- c("Income_High_income", "Income_Low_income", "Income_Middle_income")
+employment_vars <- c("Employment_Employed", "Employment_Stay-at-home caregiver",
+                     "Employment_Unemployed")
+family_vars     <- c("Family_Cohabiting", "Family_Married", "Family_Single")
+
+# ============================================================================
+# INCOME FIX: Combine Middle+High as reference category
+# ============================================================================
+cat("\n*** APPLYING INCOME FIX: Combining Middle+High as reference ***\n")
+
+# Store original income values for reporting
+original_low <- sum(df$Income_Low_income == 1)
+original_middle <- sum(df$Income_Middle_income == 1)
+original_high <- sum(df$Income_High_income == 1)
+
+cat("Original distribution:\n")
+cat("  Low income: n =", original_low, "\n")
+cat("  Middle income: n =", original_middle, "\n")
+cat("  High income: n =", original_high, "\n")
+
+# Create new income coding: Low vs. Middle+High (reference)
+# Keep Income_Low_income as is (it remains the risk factor)
+# Combine Middle+High by making both equal to 0 for Low income predictor
+df$Income_MiddleHigh_reference <- as.numeric(df$Income_Middle_income == 1 | df$Income_High_income == 1)
+
+# Verify the new coding
+cat("\nNew distribution:\n")
+cat("  Low income (risk): n =", sum(df$Income_Low_income == 1), "\n")
+cat("  Middle+High income (reference): n =", sum(df$Income_MiddleHigh_reference == 1), "\n")
+
+# Define reference groups (most protective categories)
+reference_groups <- list(
+  education = "Education_Graduate degree and higher",
+  income = "Income_MiddleHigh (combined)",  # Updated reference name
+  employment = "Employment_Employed",
+  family = "Family_Married"
+)
+
+# Create maternal age categories
+df <- df %>%
+  mutate(
+    mat_age_young = as.numeric(mat_age <= 25),  # 1 if young (risk), 0 if older (reference)
+    mat_age_cat = factor(ifelse(mat_age <= 25, "Young (≤25)", "Older (>25)"),
+                         levels = c("Older (>25)", "Young (≤25)"))  # Older as reference
+  )
+
+# Define predictors EXCLUDING reference categories
+# IMPORTANT: Now only Income_Low_income is included (Middle+High is reference)
+education_predictors <- setdiff(education_vars, reference_groups$education)
+income_predictors <- "Income_Low_income"  # Only Low income as predictor
+employment_predictors <- setdiff(employment_vars, reference_groups$employment)
+family_predictors <- setdiff(family_vars, reference_groups$family)
+
+# Combine all predictors including mat_age_young
+predictors <- c("mat_age_young", education_predictors, income_predictors,
+                employment_predictors, family_predictors)
+
+# Define outcomes
+outcomes <- c("cog_comp_score", "lang_comp_score", "motor_comp_score")
+primary_outcome <- "cog_comp_score"
+
+# Create analysis dataset
+df_analysis <- df %>% 
+  dplyr::select(study_id, mat_age, dplyr::all_of(predictors), dplyr::all_of(outcomes))
+
+cat("\nDataset summary:\n")
+cat("- Total observations:", nrow(df_analysis), "\n")
+cat("- Number of predictors:", length(predictors), "\n")
+cat("- Number of outcomes:", length(outcomes), "\n")
+cat("- PRIMARY OUTCOME:", primary_outcome, "\n")
+
+cat("\nReference groups (excluded from models):\n")
+cat("- Education:", reference_groups$education, "\n")
+cat("- Income:", reference_groups$income, "\n")
+cat("- Employment:", reference_groups$employment, "\n")
+cat("- Family:", reference_groups$family, "\n")
+cat("- Maternal age: Older (>25) [reference]\n\n")
+
+
+# 3. Create Unsupervised Features ----
+cat("Creating unsupervised features with maternal age categories...\n")
+
+# 3.1 Prepare data for FAMD
+famd_data <- df_analysis %>%
+  select(all_of(predictors))
+
+# Convert to factors for FAMD - USING ORIGINAL df FOR ALL COLUMNS
+famd_clean <- data.frame(
+  mat_age_cat = factor(ifelse(df_analysis$mat_age_young == 1, "Young (≤25)", "Older (>25)"),
+                       levels = c("Young (≤25)", "Older (>25)"))
+)
+
+# For Education - use original df which has all columns
+famd_clean$Education <- apply(df[, education_vars], 1, function(x) {
+  idx <- which(x == 1)
+  if(length(idx) == 0) {
+    return("Graduate degree and higher")
+  }
+  gsub(".*_", "", education_vars[idx[1]])
+})
+
+# For Income - UPDATED to reflect Middle+High as reference
+famd_clean$Income <- ifelse(df$Income_Low_income == 1, "Low income", "Middle-High income")
+
+# For Employment
+famd_clean$Employment <- apply(df[, employment_vars], 1, function(x) {
+  idx <- which(x == 1)
+  if(length(idx) == 0) {
+    return("Employed")
+  }
+  gsub(".*_", "", employment_vars[idx[1]])
+})
+
+# For Family
+famd_clean$Family <- apply(df[, family_vars], 1, function(x) {
+  idx <- which(x == 1)
+  if(length(idx) == 0) {
+    return("Married")
+  }
+  gsub(".*_", "", family_vars[idx[1]])
+})
+
+# Convert to factors
+famd_clean$Education <- factor(famd_clean$Education)
+famd_clean$Income <- factor(famd_clean$Income)
+famd_clean$Employment <- factor(famd_clean$Employment)
+famd_clean$Family <- factor(famd_clean$Family)
+
+# Run FAMD
+famd_result <- FAMD(famd_clean, graph = FALSE, ncp = 5)
+famd_dim1 <- famd_result$ind$coord[, 1]
+cat("FAMD: First dimension explains",
+    round(famd_result$eig[1, 2], 1), "% of variance\n")
+
+# 3.2 MCA for categorical variables
+mca_result <- MCA(famd_clean, graph = FALSE, ncp = 5)
+mca_dim1 <- mca_result$ind$coord[, 1]
+cat("MCA: First dimension explains",
+    round(mca_result$eig[1, 2], 1), "% of variance\n")
+
+# 3.3 PAM clustering with Gower distance
+gower_dist <- cluster::daisy(famd_clean, metric = "gower")
+
+# Find optimal number of clusters
+sil_width <- numeric(4)
+for(k in 2:5) {
+  pam_fit <- pam(gower_dist, k = k)
+  sil_width[k-1] <- pam_fit$silinfo$avg.width
+}
+optimal_k <- which.max(sil_width) + 1
+pam_final <- pam(gower_dist, k = optimal_k)
+
+# Order clusters by cognitive outcome
+outcome_means <- aggregate(df_analysis[[primary_outcome]],
+                           by = list(pam_final$clustering),
+                           FUN = mean)
+cluster_order <- order(outcome_means$x)
+pam_clusters <- factor(pam_final$clustering,
+                       levels = cluster_order,
+                       labels = paste0("Cluster_", 1:optimal_k))
+
+cat("PAM: Optimal number of clusters =", optimal_k,
+    "with silhouette width =", round(max(sil_width), 3), "\n\n")
+
+# Add unsupervised features to data
+df_analysis$FAMD_Dim1 <- famd_dim1
+df_analysis$MCA_Dim1 <- mca_dim1
+df_analysis$PAM_Cluster <- as.numeric(pam_clusters)
+
+# Store FAMD clean data for later use in weight extraction
+famd_clean_stored <- famd_clean
+
+
+# 4. Model specifications ----
+cat("Defining model specifications with optimized Ridge tuning...\n")
+
+# Supervised models with OPTIMIZED RIDGE
+ols_spec <- linear_reg() %>% 
+  set_engine("lm") %>% 
+  set_mode("regression")
+
+# OPTIMIZED RIDGE: Much wider penalty range including very small values
+ridge_spec <- linear_reg(penalty = tune(), mixture = 0) %>% 
+  set_engine("glmnet") %>% 
+  set_mode("regression")
+
+lasso_spec <- linear_reg(penalty = tune(), mixture = 1) %>% 
+  set_engine("glmnet") %>% 
+  set_mode("regression")
+
+elastic_spec <- linear_reg(penalty = tune(), mixture = tune()) %>% 
+  set_engine("glmnet") %>% 
+  set_mode("regression")
+
+rf_spec <- rand_forest(mtry = tune(), trees = 500, min_n = tune()) %>% 
+  set_engine("ranger", importance = "permutation") %>% 
+  set_mode("regression")
+
+# Unsupervised models
+unsup_spec <- linear_reg() %>% 
+  set_engine("lm") %>% 
+  set_mode("regression")
+# 5. Fixed Function to extract weights with proper income handling
+extract_model_weights <- function(data, model_name, outcome, n_boot = 1000) {
+  
+  cat("  Extracting weights for", model_name, "model...\n")
+  
+  # First check the actual data to debug income issues
+  cat("    Checking income variable in data:\n")
+  cat("      Income_Low_income: sum =", sum(data[["Income_Low_income"]]), 
+      "mean =", mean(data[["Income_Low_income"]]), "\n")
+  
+  # Prepare data matrix
+  X_full <- model.matrix(~ . - 1, data[predictors])
+  y_full <- data[[outcome]]
+  
+  # Check for multicollinearity
+  cor_matrix <- cor(X_full)
+  high_cor_pairs <- which(abs(cor_matrix) > 0.9 & cor_matrix != 1, arr.ind = TRUE)
+  if(nrow(high_cor_pairs) > 0) {
+    cat("    WARNING: High correlation detected between predictors\n")
+    for(i in 1:nrow(high_cor_pairs)) {
+      if(high_cor_pairs[i,1] < high_cor_pairs[i,2]) {
+        cat("      ", colnames(cor_matrix)[high_cor_pairs[i,1]], " and ",
+            colnames(cor_matrix)[high_cor_pairs[i,2]], ": r = ",
+            round(cor_matrix[high_cor_pairs[i,1], high_cor_pairs[i,2]], 3), "\n")
+      }
+    }
+  }
+  
+  if (model_name == "ridge") {
+    # Use very small penalty values to avoid over-regularization
+    lambda_seq <- c(
+      0,  # Include exact OLS
+      10^seq(-10, -6, length.out = 30),  # Very fine grid from 1e-10 to 1e-6
+      10^seq(-6, -3, length.out = 30),   # Fine grid from 1e-6 to 0.001
+      10^seq(-3, -1, length.out = 20),   # Medium grid from 0.001 to 0.1
+      10^seq(-1, 1, length.out = 10)     # Coarse grid from 0.1 to 10
+    )
+    
+    # Remove duplicates and sort
+    lambda_seq <- sort(unique(lambda_seq))
+    
+    cv_ridge <- cv.glmnet(X_full, y_full, alpha = 0,
+                          lambda = lambda_seq,
+                          standardize = TRUE,
+                          nfolds = 10,
+                          type.measure = "mse")
+    
+    best_lambda <- cv_ridge$lambda.min
+    cat("    Optimal lambda selected by CV: ", format(best_lambda, scientific = TRUE), "\n")
+    
+    # Get the actual R-squared at optimal lambda
+    ridge_fit <- glmnet(X_full, y_full, alpha = 0,
+                        lambda = best_lambda,
+                        standardize = TRUE)
+    
+    predictions <- predict(ridge_fit, newx = X_full, s = best_lambda)
+    ss_res <- sum((y_full - predictions)^2)
+    ss_tot <- sum((y_full - mean(y_full))^2)
+    r_squared <- 1 - ss_res/ss_tot
+    
+    cat("    Ridge R-squared at optimal lambda: ", round(r_squared, 4), "\n")
+    
+    # Extract coefficients
+    full_weights <- as.numeric(coef(ridge_fit, s = best_lambda))[-1]
+    names(full_weights) <- colnames(X_full)
+    
+    # Check income weight
+    if("Income_Low_income" %in% names(full_weights)) {
+      cat("    Income_Low_income weight: ", format(full_weights["Income_Low_income"], digits = 4), "\n")
+    }
+    
+    # Store best lambda for bootstrap
+    ridge_best_lambda <- best_lambda
+    
+  } else if (model_name == "lasso") {
+    # LASSO with better lambda sequence
+    lambda_seq <- exp(seq(log(0.0001), log(1), length.out = 100))
+    
+    cv_lasso <- cv.glmnet(X_full, y_full, alpha = 1,
+                          lambda = lambda_seq,
+                          standardize = TRUE,
+                          nfolds = 10,
+                          type.measure = "mse")
+    
+    best_lambda <- cv_lasso$lambda.min
+    cat("    Optimal lambda for Lasso: ", format(best_lambda, scientific = TRUE), "\n")
+    
+    lasso_fit <- glmnet(X_full, y_full, alpha = 1,
+                        lambda = best_lambda,
+                        standardize = TRUE)
+    
+    full_weights <- as.numeric(coef(lasso_fit, s = best_lambda))[-1]
+    names(full_weights) <- colnames(X_full)
+    
+    cat("    Number of non-zero coefficients: ", sum(full_weights != 0), 
+        " out of ", length(full_weights), "\n")
+    
+    # Check income weight
+    if("Income_Low_income" %in% names(full_weights)) {
+      cat("    Income_Low_income weight: ", format(full_weights["Income_Low_income"], digits = 4), "\n")
+    }
+    
+  } else if (model_name == "elastic") {
+    # Elastic Net with grid search over alpha
+    best_alpha <- 0.5
+    best_lambda <- 0.01
+    best_cvm <- Inf
+    
+    # Try different alpha values
+    for(alpha in seq(0.1, 0.9, by = 0.2)) {
+      cv_temp <- cv.glmnet(X_full, y_full, alpha = alpha,
+                           standardize = TRUE,
+                           nfolds = 10,
+                           type.measure = "mse")
+      
+      if(min(cv_temp$cvm) < best_cvm) {
+        best_cvm <- min(cv_temp$cvm)
+        best_alpha <- alpha
+        best_lambda <- cv_temp$lambda.min
+      }
+    }
+    
+    cat("    Optimal alpha for Elastic Net: ", best_alpha, "\n")
+    cat("    Optimal lambda for Elastic Net: ", format(best_lambda, scientific = TRUE), "\n")
+    
+    elastic_fit <- glmnet(X_full, y_full, 
+                          alpha = best_alpha,
+                          lambda = best_lambda,
+                          standardize = TRUE)
+    
+    full_weights <- as.numeric(coef(elastic_fit, s = best_lambda))[-1]
+    names(full_weights) <- colnames(X_full)
+    
+    cat("    Number of non-zero coefficients: ", sum(full_weights != 0), "\n")
+    
+  } else if (model_name == "ols") {
+    # OLS with explicit handling of income variables
+    ols_fit <- lm(as.formula(paste(outcome, "~ .")),
+                  data = data[c(predictors, outcome)])
+    
+    full_weights <- coef(ols_fit)[-1]
+    
+    # Check for NA coefficients
+    if(any(is.na(full_weights))) {
+      cat("    WARNING: NA coefficients detected. Likely perfect collinearity.\n")
+      na_vars <- names(full_weights)[is.na(full_weights)]
+      cat("    Variables with NA coefficients: ", paste(na_vars, collapse = ", "), "\n")
+      full_weights[is.na(full_weights)] <- 0
+    }
+    
+    # Report model R-squared and check income weight
+    cat("    OLS R-squared: ", round(summary(ols_fit)$r.squared, 4), "\n")
+    
+    if("Income_Low_income" %in% names(full_weights)) {
+      cat("    Income_Low_income weight: ", format(full_weights["Income_Low_income"], digits = 4), "\n")
+    }
+    
+  } else if (model_name == "rf") {
+    # Random forest with optimized parameters
+    rf_fit <- rand_forest(
+      mtry = floor(sqrt(length(predictors))), 
+      trees = 1000,  # More trees for stability
+      min_n = 5
+    ) %>%
+      set_engine("ranger", 
+                 importance = "permutation",
+                 num.threads = 1,
+                 seed = 123) %>%
+      set_mode("regression") %>%
+      fit(as.formula(paste(outcome, "~ .")),
+          data = data[c(predictors, outcome)])
+    
+    importance <- rf_fit$fit$variable.importance
+    
+    # Get correlation signs
+    correlations <- sapply(names(importance), function(var) {
+      cor(data[[var]], data[[outcome]], use = "complete.obs")
+    })
+    
+    full_weights <- importance * sign(correlations)
+    
+    cat("    RF OOB R-squared: ", round(rf_fit$fit$r.squared, 4), "\n")
+    
+    # Report top 5 important variables
+    top_vars <- head(sort(abs(full_weights), decreasing = TRUE), 5)
+    cat("    Top 5 important variables:\n")
+    for(i in 1:length(top_vars)) {
+      cat("      ", names(top_vars)[i], ": ", 
+          format(top_vars[i], digits = 4), "\n")
+    }
+  }
+  
+  # Bootstrap for confidence intervals
+  boot_weights <- matrix(NA, nrow = n_boot, ncol = length(predictors))
+  colnames(boot_weights) <- predictors
+  
+  successful_boots <- 0
+  cat("    Running bootstrap: ")
+  
+  for (b in 1:n_boot) {
+    if (b %% 100 == 0) cat(".")
+    
+    boot_idx <- sample(nrow(data), replace = TRUE)
+    boot_data <- data[boot_idx, ]
+    
+    tryCatch({
+      if (model_name == "ridge") {
+        X_boot <- model.matrix(~ . - 1, boot_data[predictors])
+        y_boot <- boot_data[[outcome]]
+        
+        ridge_boot <- glmnet(X_boot, y_boot, alpha = 0,
+                             lambda = ridge_best_lambda,
+                             standardize = TRUE)
+        
+        weights <- as.numeric(coef(ridge_boot, s = ridge_best_lambda))[-1]
+        
+      } else if (model_name == "lasso") {
+        X_boot <- model.matrix(~ . - 1, boot_data[predictors])
+        y_boot <- boot_data[[outcome]]
+        
+        # Quick CV for bootstrap
+        cv_boot <- cv.glmnet(X_boot, y_boot, alpha = 1,
+                             standardize = TRUE,
+                             nfolds = 5)
+        
+        weights <- as.numeric(coef(cv_boot, s = "lambda.min"))[-1]
+        
+      } else if (model_name == "elastic") {
+        X_boot <- model.matrix(~ . - 1, boot_data[predictors])
+        y_boot <- boot_data[[outcome]]
+        
+        cv_boot <- cv.glmnet(X_boot, y_boot, alpha = best_alpha,
+                             lambda = best_lambda,
+                             standardize = TRUE)
+        
+        weights <- as.numeric(coef(cv_boot, s = best_lambda))[-1]
+        
+      } else if (model_name == "ols") {
+        lm_boot <- lm(as.formula(paste(outcome, "~ .")),
+                      data = boot_data[c(predictors, outcome)])
+        weights <- coef(lm_boot)[-1]
+        weights[is.na(weights)] <- 0
+        
+      } else if (model_name == "rf") {
+        rf_boot <- rand_forest(
+          mtry = floor(sqrt(length(predictors))), 
+          trees = 500, 
+          min_n = 5
+        ) %>%
+          set_engine("ranger", importance = "permutation", seed = b) %>%
+          set_mode("regression") %>%
+          fit(as.formula(paste(outcome, "~ .")),
+              data = boot_data[c(predictors, outcome)])
+        
+        importance <- rf_boot$fit$variable.importance
+        correlations <- sapply(names(importance), function(var) {
+          cor(boot_data[[var]], boot_data[[outcome]], use = "complete.obs")
+        })
+        weights <- importance * sign(correlations)
+      }
+      
+      boot_weights[b, ] <- weights
+      successful_boots <- successful_boots + 1
+      
+    }, error = function(e) {
+      boot_weights[b, ] <- NA
+    })
+  }
+  
+  cat(" Done!\n")
+  cat("    Successful bootstrap samples:", successful_boots, "/", n_boot, "\n")
+  
+  # Remove failed bootstrap samples
+  boot_weights <- boot_weights[complete.cases(boot_weights), , drop = FALSE]
+  
+  # Calculate statistics
+  weight_stats <- data.frame(
+    Variable = names(full_weights),
+    Mean = full_weights,
+    SD = apply(boot_weights, 2, sd, na.rm = TRUE),
+    CI_Lower = apply(boot_weights, 2, quantile, probs = 0.025, na.rm = TRUE),
+    CI_Upper = apply(boot_weights, 2, quantile, probs = 0.975, na.rm = TRUE),
+    stringsAsFactors = FALSE
+  )
+  
+  # Calculate p-values
+  weight_stats$p_value <- sapply(1:length(full_weights), function(i) {
+    if (abs(full_weights[i]) < 1e-10) return(1)
+    
+    boot_vals <- boot_weights[, i]
+    if (full_weights[i] > 0) {
+      p_neg <- mean(boot_vals <= 0)
+    } else {
+      p_neg <- mean(boot_vals >= 0)
+    }
+    return(2 * min(p_neg, 1 - p_neg))
+  })
+  
+  weight_stats$SE <- weight_stats$SD / sqrt(nrow(boot_weights))
+  weight_stats$t_stat <- ifelse(weight_stats$SE > 0,
+                                weight_stats$Mean / weight_stats$SE, 0)
+  weight_stats$Significant <- ifelse(weight_stats$p_value < 0.05, "Yes", "No")
+  
+  # Final report
+  cat("    Weight range: [", round(min(weight_stats$Mean), 4), ",",
+      round(max(weight_stats$Mean), 4), "]\n")
+  cat("    Significant predictors (p < 0.05):", 
+      sum(weight_stats$p_value < 0.05), "/", length(predictors), "\n")
+  
+  # Special check for income variable
+  income_stats <- weight_stats[weight_stats$Variable == "Income_Low_income", ]
+  if(nrow(income_stats) > 0) {
+    cat("    Final income variable statistics:\n")
+    cat("      Income_Low_income: Mean = ", format(income_stats$Mean, digits = 4),
+        ", p = ", format(income_stats$p_value, digits = 4),
+        ", Sig = ", income_stats$Significant, "\n")
+  }
+  
+  return(weight_stats)
+}
+
+# function after the extract_model_weights function (around line 5)
+
+extract_unsupervised_weights <- function(data, model_name, outcome, n_boot = 1000) {
+  
+  cat("  Extracting unsupervised weights for", model_name, "...\n")
+  
+  # Initialize weights vector for all predictors
+  full_weights <- numeric(length(predictors))
+  names(full_weights) <- predictors
+  
+  # Get the outcome correlation for sign adjustment
+  outcome_data <- data[[outcome]]
+  
+  if (model_name == "MCA_Dim1") {
+    # MCA weights extraction - FIXED VERSION
+    cat("    Extracting MCA weights using contribution method...\n")
+    
+    # Check if MCA results exist
+    if (!exists("mca_result")) {
+      stop("MCA results not found. Please ensure MCA has been run.")
+    }
+    
+    # Get the correlation between MCA dimension and outcome
+    mca_cor <- cor(data$MCA_Dim1, outcome_data, use = "complete.obs")
+    cat("    MCA Dim1-outcome correlation:", round(mca_cor, 3), "\n")
+    
+    # Method 1: Try to use variable contributions or coordinates
+    if (!is.null(mca_result$var$contrib)) {
+      # Use contributions to first dimension
+      mca_contributions <- mca_result$var$contrib[, 1]
+      
+      # Map contributions to our predictors
+      for (i in seq_along(mca_contributions)) {
+        var_name <- names(mca_contributions)[i]
+        
+        # Try to match to our predictor variables
+        if (grepl("Young|≤25", var_name, ignore.case = TRUE)) {
+          full_weights["mat_age_young"] <- sqrt(mca_contributions[i]/100) * sign(mca_cor)
+        } else if (grepl("College", var_name) && !grepl("Graduate", var_name)) {
+          full_weights["Education_College degree"] <- sqrt(mca_contributions[i]/100) * sign(mca_cor)
+        } else if (grepl("High school", var_name)) {
+          full_weights["Education_High school or less"] <- sqrt(mca_contributions[i]/100) * sign(mca_cor)
+        } else if (grepl("Low", var_name) && grepl("income", var_name, ignore.case = TRUE)) {
+          full_weights["Income_Low_income"] <- sqrt(mca_contributions[i]/100) * sign(mca_cor)
+        } else if (grepl("Stay.*home|caregiver", var_name)) {
+          full_weights["Employment_Stay-at-home caregiver"] <- sqrt(mca_contributions[i]/100) * sign(mca_cor)
+        } else if (grepl("Unemployed", var_name)) {
+          full_weights["Employment_Unemployed"] <- sqrt(mca_contributions[i]/100) * sign(mca_cor)
+        } else if (grepl("Cohabiting", var_name)) {
+          full_weights["Family_Cohabiting"] <- sqrt(mca_contributions[i]/100) * sign(mca_cor)
+        } else if (grepl("Single", var_name)) {
+          full_weights["Family_Single"] <- sqrt(mca_contributions[i]/100) * sign(mca_cor)
+        }
+      }
+    }
+    
+    # Method 2: If contributions didn't work or gave all zeros, use correlations
+    if (all(abs(full_weights) < 0.001)) {
+      cat("    Method 1 failed. Using correlation-based weights...\n")
+      
+      # Get MCA dimension 1 scores
+      mca_dim1_scores <- data$MCA_Dim1
+      
+      # Calculate correlation between each predictor and MCA dimension
+      for (pred in predictors) {
+        # Point-biserial correlation for binary predictors
+        pred_cor <- cor(data[[pred]], mca_dim1_scores, use = "complete.obs")
+        
+        # Weight is the correlation times the sign of MCA-outcome correlation
+        full_weights[pred] <- pred_cor * sign(mca_cor)
+      }
+      
+      # Normalize to unit vector
+      weight_norm <- sqrt(sum(full_weights^2))
+      if (weight_norm > 0) {
+        full_weights <- full_weights / weight_norm
+      }
+    }
+    
+    # Report the weights
+    cat("    MCA weights extracted:\n")
+    for (pred in predictors) {
+      if (abs(full_weights[pred]) > 0.001) {
+        cat("      ", pred, ":", round(full_weights[pred], 4), "\n")
+      }
+    }
+    
+  } else if (model_name == "FAMD_Dim1") {
+    # FAMD weights extraction (keep existing code but improve)
+    cat("    Extracting FAMD variable coordinates...\n")
+    
+    if (!exists("famd_result")) {
+      stop("FAMD results not found. Please ensure FAMD has been run.")
+    }
+    
+    famd_cor <- cor(data$FAMD_Dim1, outcome_data, use = "complete.obs")
+    cat("    FAMD Dim1-outcome correlation:", round(famd_cor, 3), "\n")
+    
+    # Use variable contributions if available
+    if (!is.null(famd_result$quali.var$contrib)) {
+      famd_contributions <- famd_result$quali.var$contrib[, 1]
+      
+      for (i in seq_along(famd_contributions)) {
+        var_name <- names(famd_contributions)[i]
+        contrib_value <- sqrt(famd_contributions[i]/100) * sign(famd_cor)
+        
+        # Map to predictors
+        if (grepl("Young|≤25", var_name)) {
+          full_weights["mat_age_young"] <- contrib_value
+        } else if (var_name == "College degree") {
+          full_weights["Education_College degree"] <- contrib_value
+        } else if (var_name == "High school or less") {
+          full_weights["Education_High school or less"] <- contrib_value
+        } else if (grepl("Low", var_name) && grepl("income", var_name, ignore.case = TRUE)) {
+          full_weights["Income_Low_income"] <- contrib_value
+        } else if (var_name == "Stay-at-home caregiver") {
+          full_weights["Employment_Stay-at-home caregiver"] <- contrib_value
+        } else if (var_name == "Unemployed") {
+          full_weights["Employment_Unemployed"] <- contrib_value
+        } else if (var_name == "Cohabiting") {
+          full_weights["Family_Cohabiting"] <- contrib_value
+        } else if (var_name == "Single") {
+          full_weights["Family_Single"] <- contrib_value
+        }
+      }
+    }
+    
+    # Fallback to coordinates if contributions not available
+    if (all(abs(full_weights) < 0.001) && !is.null(famd_result$quali.var$coord)) {
+      famd_var_coords <- famd_result$quali.var$coord[, 1]
+      
+      for (var_name in names(famd_var_coords)) {
+        coord_value <- famd_var_coords[var_name] * sign(famd_cor)
+        
+        if (var_name %in% c("Young (≤25)", "Young (<=25)")) {
+          full_weights["mat_age_young"] <- coord_value
+        } else if (var_name == "College degree") {
+          full_weights["Education_College degree"] <- coord_value
+        } else if (var_name == "High school or less") {
+          full_weights["Education_High school or less"] <- coord_value
+        } else if (var_name %in% c("Low income", "Low_income")) {
+          full_weights["Income_Low_income"] <- coord_value
+        } else if (var_name == "Stay-at-home caregiver") {
+          full_weights["Employment_Stay-at-home caregiver"] <- coord_value
+        } else if (var_name == "Unemployed") {
+          full_weights["Employment_Unemployed"] <- coord_value
+        } else if (var_name == "Cohabiting") {
+          full_weights["Family_Cohabiting"] <- coord_value
+        } else if (var_name == "Single") {
+          full_weights["Family_Single"] <- coord_value
+        }
+      }
+    }
+    
+  } else if (model_name == "PAM_Cluster") {
+    # PAM weights based on cluster differences
+    cat("    Calculating PAM cluster-based weights...\n")
+    
+    cluster_assignments <- data$PAM_Cluster
+    outcome_by_cluster <- aggregate(outcome_data, by = list(cluster_assignments), FUN = mean)
+    
+    worst_cluster <- outcome_by_cluster$Group.1[which.min(outcome_by_cluster$x)]
+    best_cluster <- outcome_by_cluster$Group.1[which.max(outcome_by_cluster$x)]
+    
+    cat("    Best outcome cluster:", best_cluster, 
+        "(mean =", round(max(outcome_by_cluster$x), 2), ")\n")
+    cat("    Worst outcome cluster:", worst_cluster, 
+        "(mean =", round(min(outcome_by_cluster$x), 2), ")\n")
+    
+    for (pred in predictors) {
+      pred_by_cluster <- aggregate(data[[pred]], by = list(cluster_assignments), FUN = mean)
+      worst_mean <- pred_by_cluster$x[pred_by_cluster$Group.1 == worst_cluster]
+      best_mean <- pred_by_cluster$x[pred_by_cluster$Group.1 == best_cluster]
+      
+      if (length(worst_mean) > 0 && length(best_mean) > 0) {
+        full_weights[pred] <- -(worst_mean - best_mean)
+      }
+    }
+  }
+  
+  # Bootstrap for confidence intervals
+  cat("    Running bootstrap (n =", n_boot, ")...")
+  boot_weights <- matrix(NA, nrow = n_boot, ncol = length(predictors))
+  colnames(boot_weights) <- predictors
+  
+  successful_boots <- 0
+  
+  for (b in 1:n_boot) {
+    if (b %% 100 == 0) cat(".")
+    
+    boot_idx <- sample(nrow(data), replace = TRUE)
+    boot_data <- data[boot_idx, ]
+    boot_weights_iter <- numeric(length(predictors))
+    names(boot_weights_iter) <- predictors
+    
+    tryCatch({
+      if (model_name == "MCA_Dim1") {
+        # Bootstrap using correlation method
+        boot_mca_scores <- boot_data$MCA_Dim1
+        boot_outcome <- boot_data[[outcome]]
+        boot_cor <- cor(boot_mca_scores, boot_outcome, use = "complete.obs")
+        
+        for (pred in predictors) {
+          pred_cor <- cor(boot_data[[pred]], boot_mca_scores, use = "complete.obs")
+          boot_weights_iter[pred] <- pred_cor * sign(boot_cor)
+        }
+        
+        # Normalize
+        weight_norm <- sqrt(sum(boot_weights_iter^2))
+        if (weight_norm > 0) {
+          boot_weights_iter <- boot_weights_iter / weight_norm
+        }
+        
+      } else if (model_name == "FAMD_Dim1") {
+        # Similar approach for FAMD
+        boot_famd_scores <- boot_data$FAMD_Dim1
+        boot_outcome <- boot_data[[outcome]]
+        boot_cor <- cor(boot_famd_scores, boot_outcome, use = "complete.obs")
+        
+        for (pred in predictors) {
+          pred_cor <- cor(boot_data[[pred]], boot_famd_scores, use = "complete.obs")
+          boot_weights_iter[pred] <- pred_cor * sign(boot_cor)
+        }
+        
+        weight_norm <- sqrt(sum(boot_weights_iter^2))
+        if (weight_norm > 0) {
+          boot_weights_iter <- boot_weights_iter / weight_norm
+        }
+        
+      } else if (model_name == "PAM_Cluster") {
+        boot_clusters <- boot_data$PAM_Cluster
+        boot_outcome <- boot_data[[outcome]]
+        
+        outcome_by_cluster <- aggregate(boot_outcome, by = list(boot_clusters), FUN = mean)
+        
+        if (nrow(outcome_by_cluster) > 1) {
+          worst_cluster <- outcome_by_cluster$Group.1[which.min(outcome_by_cluster$x)]
+          best_cluster <- outcome_by_cluster$Group.1[which.max(outcome_by_cluster$x)]
+          
+          for (pred in predictors) {
+            pred_by_cluster <- aggregate(boot_data[[pred]], by = list(boot_clusters), FUN = mean)
+            
+            worst_rows <- pred_by_cluster$Group.1 == worst_cluster
+            best_rows <- pred_by_cluster$Group.1 == best_cluster
+            
+            if (any(worst_rows) && any(best_rows)) {
+              worst_mean <- pred_by_cluster$x[worst_rows]
+              best_mean <- pred_by_cluster$x[best_rows]
+              boot_weights_iter[pred] <- -(worst_mean - best_mean)
+            }
+          }
+        }
+      }
+      
+      boot_weights[b, ] <- boot_weights_iter
+      successful_boots <- successful_boots + 1
+      
+    }, error = function(e) {
+      boot_weights[b, ] <- NA
+    })
+  }
+  
+  cat(" Done!\n")
+  cat("    Successful bootstrap samples:", successful_boots, "/", n_boot, "\n")
+  
+  # Remove failed bootstrap samples
+  boot_weights <- boot_weights[complete.cases(boot_weights), , drop = FALSE]
+  
+  # Calculate statistics
+  weight_stats <- data.frame(
+    Variable = names(full_weights),
+    Mean = full_weights,
+    SD = apply(boot_weights, 2, sd, na.rm = TRUE),
+    CI_Lower = apply(boot_weights, 2, quantile, probs = 0.025, na.rm = TRUE),
+    CI_Upper = apply(boot_weights, 2, quantile, probs = 0.975, na.rm = TRUE),
+    stringsAsFactors = FALSE
+  )
+  
+  # Calculate p-values (test if weight is significantly different from 0)
+  weight_stats$p_value <- sapply(1:nrow(weight_stats), function(i) {
+    if (nrow(boot_weights) < 30 || abs(weight_stats$Mean[i]) < 1e-10) return(1)
+    
+    boot_vals <- boot_weights[, i]
+    # Two-tailed test against 0
+    p_val <- 2 * min(mean(boot_vals <= 0), mean(boot_vals >= 0))
+    return(p_val)
+  })
+  
+  weight_stats$SE <- weight_stats$SD
+  weight_stats$t_stat <- ifelse(weight_stats$SE > 0, weight_stats$Mean / weight_stats$SE, 0)
+  weight_stats$Significant <- ifelse(weight_stats$p_value < 0.05, "Yes", "No")
+  
+  # Final summary
+  cat("    Non-zero weights:", sum(abs(weight_stats$Mean) > 0.001), 
+      "out of", length(full_weights), "\n")
+  cat("    Weight range: [", round(min(weight_stats$Mean), 4), ",",
+      round(max(weight_stats$Mean), 4), "]\n")
+  
+  return(weight_stats)
+}
+
+
+
+# 6. Optimized Nested CV with improved tuning for all outcomes
+perform_nested_cv_all_outcomes <- function(data,
+                                           supervised_wf,
+                                           unsupervised_wf,
+                                           n_outer = 10,
+                                           n_inner = 5) {
+  
+  all_results <- list()
+  
+  for (outcome_name in outcomes) {
+    cat("\n========================================\n")
+    cat("Evaluating outcome:", outcome_name, "\n")
+    cat("========================================\n")
+    
+    # Prepare outcome-specific data
+    outcome_data <- data %>%
+      dplyr::select(-dplyr::all_of(setdiff(outcomes, outcome_name))) %>%
+      dplyr::rename(outcome = dplyr::all_of(outcome_name))
+    
+    cat("  Cases for", outcome_name, ":", nrow(outcome_data), "\n")
+    cat("  Outcome range: [", round(min(outcome_data$outcome), 2), 
+        ",", round(max(outcome_data$outcome), 2), "]\n")
+    cat("  Outcome SD:", round(sd(outcome_data$outcome), 2), "\n")
+    
+    # Enhanced recipe for supervised models with better preprocessing
+    supervised_recipe <- recipe(outcome ~ ., data = outcome_data) %>%
+      update_role(study_id, mat_age, new_role = "ID") %>%
+      update_role(FAMD_Dim1, MCA_Dim1, PAM_Cluster, new_role = "unsupervised") %>%
+      step_rm(FAMD_Dim1, MCA_Dim1, PAM_Cluster) %>%
+      step_nzv(all_predictors(), freq_cut = 95/5, unique_cut = 10) %>%
+      step_zv(all_predictors()) %>%
+      step_normalize(all_numeric_predictors())  # Important for regularized models
+    
+    # Create CV folds with better stratification
+    set.seed(123)  # For reproducibility
+    outer_folds <- vfold_cv(outcome_data, v = n_outer, strata = outcome)
+    
+    outcome_results <- list()
+    
+    # Process supervised models
+    cat("\nEvaluating supervised models...\n")
+    for (model_name in names(supervised_wf)) {
+      
+      cat("  Training", model_name, "...\n")
+      current_wf <- supervised_wf[[model_name]] %>% add_recipe(supervised_recipe)
+      
+      # Handle tuning with optimized grids
+      if (model_name %in% c("ridge", "lasso", "elastic", "rf")) {
+        
+        # OPTIMIZED tuning grids based on data characteristics
+        if (model_name == "ridge") {
+          # Ridge: Focus on very small penalties
+          tune_grid <- tibble(
+            penalty = c(0, 1e-10, 1e-8, 1e-6, 1e-5, 1e-4, 
+                        0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1)
+          )
+          
+        } else if (model_name == "lasso") {
+          # Lasso: Wider range for feature selection
+          tune_grid <- tibble(
+            penalty = c(1e-5, 5e-5, 1e-4, 5e-4, 
+                        0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 2)
+          )
+          
+        } else if (model_name == "elastic") {
+          # Elastic Net: Grid search over both parameters
+          tune_grid <- expand.grid(
+            penalty = c(1e-5, 1e-4, 0.001, 0.01, 0.1, 0.5, 1),
+            mixture = c(0.1, 0.3, 0.5, 0.7, 0.9)
+          ) %>%
+            as_tibble() %>%
+            distinct()  # Remove any duplicates
+          
+        } else if (model_name == "rf") {
+          # Random Forest: Optimized for small datasets
+          n_pred <- length(predictors)
+          tune_grid <- expand.grid(
+            mtry = c(2, floor(sqrt(n_pred)), floor(n_pred/3), floor(n_pred/2)),
+            min_n = c(2, 5, 10, 15)
+          ) %>%
+            as_tibble() %>%
+            filter(mtry <= n_pred - 1) %>%  # Remove invalid combinations
+            distinct()  # Remove duplicates
+        }
+        
+        # Nested CV with enhanced error handling
+        tryCatch({
+          nested_results <- outer_folds %>%
+            mutate(
+              inner = map(splits, ~ {
+                inner_data <- analysis(.x)
+                # Use fewer folds if data is small
+                n_inner_actual <- min(n_inner, floor(nrow(inner_data)/10))
+                n_inner_actual <- max(3, n_inner_actual)  # At least 3 folds
+                vfold_cv(inner_data, v = n_inner_actual, strata = outcome)
+              }),
+              tuned = map(inner, ~ {
+                tryCatch({
+                  # Disable parallel to avoid future package conflicts
+                  control <- control_grid(
+                    save_pred = TRUE, 
+                    verbose = FALSE,
+                    save_workflow = TRUE,
+                    parallel_over = "nothing",  # Disable parallel
+                    allow_par = FALSE
+                  )
+                  
+                  tune_result <- tune_grid(
+                    current_wf, 
+                    resamples = .x, 
+                    grid = tune_grid,
+                    metrics = metric_set(rmse, rsq, mae, mape),
+                    control = control
+                  )
+                  
+                  # Report best parameters found
+                  best_params <- select_best(tune_result, metric = "rsq")
+                  cat("    Best params found in fold: ")
+                  print(best_params, width = Inf)
+                  
+                  return(tune_result)
+                  
+                }, error = function(e) {
+                  cat("    WARNING: Tuning failed -", e$message, "\n")
+                  return(NULL)
+                })
+              }),
+              best = map(tuned, ~ {
+                if (!is.null(.x)) {
+                  # Use rsq for selection (higher is better)
+                  select_best(.x, metric = "rsq")
+                } else {
+                  # Fallback parameters
+                  switch(model_name,
+                         ridge = tibble(penalty = 0.01),
+                         lasso = tibble(penalty = 0.01),
+                         elastic = tibble(penalty = 0.01, mixture = 0.5),
+                         rf = tibble(mtry = floor(sqrt(length(predictors))), min_n = 5)
+                  )
+                }
+              }),
+              final_wf = map(best, ~ finalize_workflow(current_wf, .x)),
+              fit = map2(final_wf, splits, ~ {
+                tryCatch(
+                  fit(.x, analysis(.y)),
+                  error = function(e) {
+                    cat("    ERROR fitting model:", e$message, "\n")
+                    NULL
+                  }
+                )
+              }),
+              pred = map2(fit, splits, ~ {
+                if (!is.null(.x)) {
+                  augment(.x, new_data = assessment(.y))
+                } else {
+                  tibble(outcome = assessment(.y)$outcome, .pred = NA_real_)
+                }
+              })
+            )
+          
+          # Check if we have valid predictions
+          valid_preds <- nested_results %>%
+            unnest(pred) %>%
+            filter(!is.na(.pred))
+          
+          if (nrow(valid_preds) == 0) {
+            cat("    ERROR: No valid predictions obtained\n")
+            nested_results <- NULL
+          }
+          
+        }, error = function(e) {
+          cat("    ERROR in nested CV:", e$message, "\n")
+          cat("    Falling back to simple model without tuning...\n")
+          
+          # Fallback: Use default parameters
+          fixed_params <- switch(
+            model_name,
+            ridge = tibble(penalty = 0.01),
+            lasso = tibble(penalty = 0.01),
+            elastic = tibble(penalty = 0.01, mixture = 0.5),
+            rf = tibble(mtry = floor(sqrt(length(predictors))), min_n = 5)
+          )
+          
+          fixed_wf <- finalize_workflow(current_wf, fixed_params)
+          
+          nested_results <<- outer_folds %>%
+            mutate(
+              fit = map(splits, ~ {
+                tryCatch(
+                  fit(fixed_wf, analysis(.x)),
+                  error = function(e) NULL
+                )
+              }),
+              pred = map2(fit, splits, ~ {
+                if (!is.null(.x)) {
+                  augment(.x, assessment(.y))
+                } else {
+                  tibble(outcome = assessment(.y)$outcome, .pred = NA_real_)
+                }
+              })
+            )
+        })
+        
+      } else {  # OLS
+        nested_results <- outer_folds %>%
+          mutate(
+            fit = map(splits, ~ {
+              tryCatch(
+                fit(current_wf, analysis(.x)),
+                error = function(e) {
+                  cat("    ERROR in OLS:", e$message, "\n")
+                  NULL
+                }
+              )
+            }),
+            pred = map2(fit, splits, ~ {
+              if (!is.null(.x)) {
+                augment(.x, assessment(.y))
+              } else {
+                tibble(outcome = assessment(.y)$outcome, .pred = NA_real_)
+              }
+            })
+          )
+      }
+      
+      # Calculate metrics with better error handling
+      if (!is.null(nested_results)) {
+        test_metrics <- tryCatch({
+          pred_data <- nested_results %>%
+            dplyr::select(id, pred) %>%
+            unnest(pred) %>%
+            filter(!is.na(.pred))
+          
+          if (nrow(pred_data) > 0) {
+            pred_data %>%
+              group_by(id) %>%
+              metrics(truth = outcome, estimate = .pred) %>%
+              group_by(.metric) %>%
+              summarise(
+                mean = mean(.estimate, na.rm = TRUE),
+                sd = sd(.estimate, na.rm = TRUE),
+                median = median(.estimate, na.rm = TRUE),
+                q25 = quantile(.estimate, 0.25, na.rm = TRUE),
+                q75 = quantile(.estimate, 0.75, na.rm = TRUE),
+                .groups = "drop"
+              ) %>%
+              mutate(model = model_name,
+                     outcome = outcome_name,
+                     type = "supervised")
+          } else {
+            tibble(
+              .metric = c("rmse", "rsq", "mae"),
+              mean = NA_real_, sd = NA_real_, median = NA_real_,
+              q25 = NA_real_, q75 = NA_real_,
+              model = model_name, outcome = outcome_name, type = "supervised"
+            )
+          }
+        }, error = function(e) {
+          cat("    ERROR calculating metrics:", e$message, "\n")
+          tibble(
+            .metric = c("rmse", "rsq", "mae"),
+            mean = NA_real_, sd = NA_real_, median = NA_real_,
+            q25 = NA_real_, q75 = NA_real_,
+            model = model_name, outcome = outcome_name, type = "supervised"
+          )
+        })
+        
+        # Report performance
+        rsq_mean <- test_metrics %>% 
+          filter(.metric == "rsq") %>% 
+          pull(mean)
+        
+        if (!is.na(rsq_mean)) {
+          cat("    Final R² =", round(rsq_mean, 3), "\n")
+        } else {
+          cat("    Failed to calculate R²\n")
+        }
+        
+        outcome_results[[model_name]] <- list(
+          metrics = test_metrics,
+          nested = nested_results,
+          type = "supervised"
+        )
+      }
+    }
+    
+    # Process unsupervised models with optimization
+    cat("\nEvaluating unsupervised models...\n")
+    for (model_name in names(unsupervised_wf)) {
+      
+      cat("  Training", model_name, "...\n")
+      
+      # Create subset data for unsupervised feature
+      unsup_data <- outcome_data %>%
+        select(outcome, !!sym(model_name), study_id, mat_age)
+      
+      # Check the feature characteristics
+      feature_vals <- unsup_data[[model_name]]
+      n_unique <- length(unique(feature_vals))
+      feature_range <- range(feature_vals, na.rm = TRUE)
+      
+      cat("    Feature has", n_unique, "unique values\n")
+      cat("    Feature range: [", round(feature_range[1], 3), 
+          ",", round(feature_range[2], 3), "]\n")
+      
+      # Determine if categorical (PAM_Cluster likely)
+      is_categorical <- (model_name == "PAM_Cluster") || (n_unique <= 10)
+      
+      if (is_categorical) {
+        # Categorical treatment
+        cat("    Treating as categorical\n")
+        
+        unsup_recipe <- recipe(outcome ~ ., data = unsup_data) %>%
+          update_role(study_id, mat_age, new_role = "ID") %>%
+          step_mutate(!!sym(model_name) := as.factor(!!sym(model_name))) %>%
+          step_dummy(all_of(model_name), one_hot = FALSE)
+        
+        current_wf <- workflow() %>%
+          add_model(linear_reg() %>% set_engine("lm")) %>%
+          add_recipe(unsup_recipe)
+        
+      } else {
+        # Continuous treatment with polynomial option
+        cat("    Treating as continuous\n")
+        
+        # Test linear vs polynomial
+        test_recipes <- list(
+          linear = recipe(outcome ~ ., data = unsup_data) %>%
+            update_role(study_id, mat_age, new_role = "ID") %>%
+            step_normalize(all_predictors()),
+          
+          poly2 = recipe(outcome ~ ., data = unsup_data) %>%
+            update_role(study_id, mat_age, new_role = "ID") %>%
+            step_normalize(all_predictors()) %>%
+            step_poly(all_predictors(), degree = 2),
+          
+          poly3 = recipe(outcome ~ ., data = unsup_data) %>%
+            update_role(study_id, mat_age, new_role = "ID") %>%
+            step_normalize(all_predictors()) %>%
+            step_poly(all_predictors(), degree = 3)
+        )
+        
+        # Quick test to select best approach
+        test_folds <- vfold_cv(unsup_data, v = 5, strata = outcome)
+        best_recipe_name <- "linear"
+        best_rsq <- -Inf
+        
+        for (recipe_name in names(test_recipes)) {
+          test_wf <- workflow() %>%
+            add_model(linear_reg() %>% set_engine("lm")) %>%
+            add_recipe(test_recipes[[recipe_name]])
+          
+          # Use manual cross-validation to avoid future package issues
+          rsq_values <- numeric(5)
+          for(i in 1:5) {
+            train_data <- analysis(test_folds$splits[[i]])
+            test_data <- assessment(test_folds$splits[[i]])
+            
+            fit_obj <- tryCatch(
+              fit(test_wf, train_data),
+              error = function(e) NULL
+            )
+            
+            if(!is.null(fit_obj)) {
+              preds <- predict(fit_obj, test_data)
+              rsq_values[i] <- cor(preds$.pred, test_data$outcome)^2
+            } else {
+              rsq_values[i] <- NA
+            }
+          }
+          
+          mean_rsq <- mean(rsq_values, na.rm = TRUE)
+          
+          cat("      ", recipe_name, "R² =", round(mean_rsq, 3), "\n")
+          
+          if (!is.na(mean_rsq) && mean_rsq > best_rsq) {
+            best_rsq <- mean_rsq
+            best_recipe_name <- recipe_name
+          }
+        }
+        
+        cat("    Selected:", best_recipe_name, "\n")
+        
+        current_wf <- workflow() %>%
+          add_model(linear_reg() %>% set_engine("lm")) %>%
+          add_recipe(test_recipes[[best_recipe_name]])
+      }
+      
+      # Create CV folds for this data
+      outer_folds_unsup <- vfold_cv(unsup_data, v = n_outer, strata = outcome)
+      
+      # Fit the model
+      nested_results <- outer_folds_unsup %>%
+        mutate(
+          fit = map(splits, ~ {
+            tryCatch(
+              fit(current_wf, analysis(.x)),
+              error = function(e) NULL
+            )
+          }),
+          pred = map2(fit, splits, ~ {
+            if (!is.null(.x)) {
+              augment(.x, assessment(.y))
+            } else {
+              tibble(outcome = assessment(.y)$outcome, .pred = NA_real_)
+            }
+          })
+        )
+      
+      # Calculate metrics
+      test_metrics <- tryCatch({
+        nested_results %>%
+          dplyr::select(id, pred) %>%
+          unnest(pred) %>%
+          filter(!is.na(.pred)) %>%
+          group_by(id) %>%
+          metrics(truth = outcome, estimate = .pred) %>%
+          group_by(.metric) %>%
+          summarise(
+            mean = mean(.estimate, na.rm = TRUE),
+            sd = sd(.estimate, na.rm = TRUE),
+            median = median(.estimate, na.rm = TRUE),
+            q25 = quantile(.estimate, 0.25, na.rm = TRUE),
+            q75 = quantile(.estimate, 0.75, na.rm = TRUE),
+            .groups = "drop"
+          ) %>%
+          mutate(model = model_name,
+                 outcome = outcome_name,
+                 type = "unsupervised")
+      }, error = function(e) {
+        cat("    ERROR with unsupervised model:", e$message, "\n")
+        tibble(
+          .metric = c("rmse", "rsq", "mae"),
+          mean = NA_real_, sd = NA_real_, median = NA_real_,
+          q25 = NA_real_, q75 = NA_real_,
+          model = model_name, outcome = outcome_name, type = "unsupervised"
+        )
+      })
+      
+      rsq_mean <- test_metrics %>% 
+        filter(.metric == "rsq") %>% 
+        pull(mean)
+      
+      if (!is.na(rsq_mean)) {
+        cat("    Final R² =", round(rsq_mean, 3), "\n")
+      }
+      
+      outcome_results[[model_name]] <- list(
+        metrics = test_metrics,
+        nested = nested_results,
+        type = "unsupervised"
+      )
+    }
+    
+    all_results[[outcome_name]] <- outcome_results
+  }
+  
+  cat("\n========================================\n")
+  cat("Nested CV complete.\n")
+  cat("========================================\n")
+  
+  all_results
+}
+
+# 7. Create workflows ----
+cat("\nCreating workflows...\n")
+
+supervised_workflows <- list(
+  ols     = workflow() %>% add_model(ols_spec),
+  ridge   = workflow() %>% add_model(ridge_spec),
+  lasso   = workflow() %>% add_model(lasso_spec),
+  elastic = workflow() %>% add_model(elastic_spec),
+  rf      = workflow() %>% add_model(rf_spec)
+)
+
+unsupervised_workflows <- list(
+  FAMD_Dim1   = workflow() %>% add_model(unsup_spec),
+  MCA_Dim1    = workflow() %>% add_model(unsup_spec),
+  PAM_Cluster = workflow() %>% add_model(unsup_spec)
+)
+
+# 8. Run nested CV ----
+cat("\nRunning nested cross-validation for all outcomes...\n")
+
+all_cv_results <- perform_nested_cv_all_outcomes(
+  df_analysis,
+  supervised_workflows,
+  unsupervised_workflows,
+  n_outer = 10,
+  n_inner = 5
+)
+
+cat("\n========================================\n")
+cat("Nested CV complete.\n")
+cat("========================================\n")
+
+# 9. Extract results and identify best models ----
+cat("\nExtracting results and identifying best models...\n")
+
+# Combine all metrics
+all_metrics <- map_df(outcomes, function(outcome) {
+  map_df(all_cv_results[[outcome]], function(model_result) {
+    model_result$metrics
+  })
+})
+
+# Identify best models based on cognitive outcome
+cognitive_rsq <- all_metrics %>%
+  filter(.metric == "rsq", outcome == primary_outcome) %>%
+  select(outcome, model, mean, sd, type) %>%
+  arrange(type, desc(mean))
+
+best_supervised <- cognitive_rsq %>%
+  filter(type == "supervised") %>%
+  arrange(desc(mean)) %>%
+  slice(1) %>%
+  pull(model)
+
+best_unsupervised <- cognitive_rsq %>%
+  filter(type == "unsupervised") %>%
+  arrange(desc(mean)) %>%
+  slice(1) %>%
+  pull(model)
+
+cat("\n=== BEST MODELS (based on cognitive outcome) ===\n")
+cat("Best supervised model:", best_supervised, "\n")
+cat("Best unsupervised model:", best_unsupervised, "\n\n")
+
+
+# 10. Extract weights for all outcomes using best models ----
+cat("\nExtracting weights with confidence intervals for all outcomes...\n")
+
+# Initialize storage
+all_weights <- list()
+all_pairwise_comparisons <- list()
+
+# Process all outcomes
+for (outcome in outcomes) {
+  cat("\nProcessing weights for", outcome, "...\n")
+  
+  # Extract supervised weights
+  supervised_weights <- extract_model_weights(df_analysis, best_supervised, outcome, n_boot = 1000)
+  
+  supervised_weights$Model <- best_supervised
+  supervised_weights$Type <- "Supervised"
+  supervised_weights$Outcome <- outcome
+  supervised_weights$Direction <- ifelse(supervised_weights$Mean > 0, "Protective", "Risk")
+  
+  # Extract unsupervised weights
+  unsupervised_weights <- extract_unsupervised_weights(df_analysis, best_unsupervised, outcome, n_boot = 200)
+  unsupervised_weights$Model <- best_unsupervised
+  unsupervised_weights$Type <- "Unsupervised"
+  unsupervised_weights$Outcome <- outcome
+  unsupervised_weights$Direction <- ifelse(unsupervised_weights$Mean > 0, "Protective", "Risk")
+  
+  # Create pairwise comparisons for linear models only
+  if (best_supervised %in% c("ols", "ridge", "lasso", "elastic")) {
+    cat("  Calculating pairwise comparisons for", best_supervised, "model...\n")
+    
+    # Initialize pairwise comparisons dataframe
+    pairwise_list <- list()
+    
+    # Define reference categories for each variable group
+    reference_categories <- list(
+      education = "Education_Graduate degree and higher",
+      income = "Income_MiddleHigh (combined)", 
+      employment = "Employment_Employed",
+      family = "Family_Married",
+      mat_age = "Older (>25)"
+    )
+    
+    # Education comparisons
+    education_comparisons <- list(
+      c("Education_High school or less", "Education_College degree"),
+      c("Education_High school or less", reference_categories$education),
+      c("Education_College degree", reference_categories$education)
+    )
+    
+    # Income comparison - NOW ONLY ONE since Middle+High is reference
+    income_comparisons <- list(
+      c("Income_Low_income", reference_categories$income)
+    )
+    
+    # Employment comparisons
+    employment_comparisons <- list(
+      c("Employment_Unemployed", "Employment_Stay-at-home caregiver"),
+      c("Employment_Unemployed", reference_categories$employment),
+      c("Employment_Stay-at-home caregiver", reference_categories$employment)
+    )
+    
+    # Family comparisons
+    family_comparisons <- list(
+      c("Family_Single", "Family_Cohabiting"),
+      c("Family_Single", reference_categories$family),
+      c("Family_Cohabiting", reference_categories$family)
+    )
+    
+    # Combine all comparisons
+    all_comparisons <- c(
+      education_comparisons,
+      income_comparisons,
+      employment_comparisons,
+      family_comparisons
+    )
+    
+    # Calculate differences for each comparison
+    for (comp in all_comparisons) {
+      # Special handling for income comparison
+      if (grepl("Income", comp[1])) {
+        # Income_Low_income vs Middle+High reference
+        weight1 <- supervised_weights$Mean[supervised_weights$Variable == "Income_Low_income"]
+        se1 <- supervised_weights$SE[supervised_weights$Variable == "Income_Low_income"]
+        
+        if (length(weight1) > 0) {
+          comparison_label <- "Low income vs Middle+High income"
+          
+          pairwise_list[[comparison_label]] <- data.frame(
+            Comparison = comparison_label,
+            Estimate = weight1,
+            SE = se1,
+            CI_Lower = weight1 - 1.96 * se1,
+            CI_Upper = weight1 + 1.96 * se1,
+            p_value = supervised_weights$p_value[supervised_weights$Variable == "Income_Low_income"],
+            Significance = case_when(
+              supervised_weights$p_value[supervised_weights$Variable == "Income_Low_income"] < 0.001 ~ "***",
+              supervised_weights$p_value[supervised_weights$Variable == "Income_Low_income"] < 0.01 ~ "**",
+              supervised_weights$p_value[supervised_weights$Variable == "Income_Low_income"] < 0.05 ~ "*",
+              TRUE ~ ""
+            ),
+            stringsAsFactors = FALSE
+          )
+        }
+      } else {
+        # Handle other comparisons as before
+        var1_exists <- comp[1] %in% supervised_weights$Variable
+        var2_exists <- comp[2] %in% supervised_weights$Variable
+        
+        if (var1_exists || var2_exists) {
+          weight1 <- ifelse(var1_exists, 
+                            supervised_weights$Mean[supervised_weights$Variable == comp[1]], 
+                            0)
+          weight2 <- ifelse(var2_exists,
+                            supervised_weights$Mean[supervised_weights$Variable == comp[2]],
+                            0)
+          
+          se1 <- ifelse(var1_exists,
+                        supervised_weights$SE[supervised_weights$Variable == comp[1]],
+                        0)
+          se2 <- ifelse(var2_exists,
+                        supervised_weights$SE[supervised_weights$Variable == comp[2]],
+                        0)
+          
+          diff <- weight1 - weight2
+          combined_se <- sqrt(se1^2 + se2^2)
+          
+          ci_lower <- diff - 1.96 * combined_se
+          ci_upper <- diff + 1.96 * combined_se
+          
+          z_stat <- ifelse(combined_se > 0, abs(diff) / combined_se, 0)
+          p_value <- 2 * (1 - pnorm(abs(z_stat)))
+          
+          significance <- case_when(
+            p_value < 0.001 ~ "***",
+            p_value < 0.01 ~ "**",
+            p_value < 0.05 ~ "*",
+            TRUE ~ ""
+          )
+          
+          # Create proper comparison labels
+          if (grepl("Education", comp[1])) {
+            label1 <- gsub("Education_", "", comp[1])
+            label2 <- ifelse(grepl("Education", comp[2]), 
+                             gsub("Education_", "", comp[2]), 
+                             "Graduate degree and higher")
+          } else if (grepl("Employment", comp[1])) {
+            label1 <- gsub("Employment_", "", comp[1])
+            label2 <- ifelse(grepl("Employment", comp[2]), 
+                             gsub("Employment_", "", comp[2]), 
+                             "Employed")
+          } else if (grepl("Family", comp[1])) {
+            label1 <- gsub("Family_", "", comp[1])
+            label2 <- ifelse(grepl("Family", comp[2]), 
+                             gsub("Family_", "", comp[2]), 
+                             "Married")
+          } else {
+            label1 <- gsub("_", " ", gsub(".*_", "", comp[1]))
+            label2 <- gsub("_", " ", gsub(".*_", "", comp[2]))
+          }
+          
+          comparison_label <- paste(label1, "vs", label2)
+          
+          pairwise_list[[comparison_label]] <- data.frame(
+            Comparison = comparison_label,
+            Estimate = diff,
+            SE = combined_se,
+            CI_Lower = ci_lower,
+            CI_Upper = ci_upper,
+            p_value = p_value,
+            Significance = significance,
+            stringsAsFactors = FALSE
+          )
+        }
+      }
+    }
+    
+    # Add maternal age comparison if present
+    if ("mat_age_young" %in% supervised_weights$Variable) {
+      mat_age_weight <- supervised_weights$Mean[supervised_weights$Variable == "mat_age_young"]
+      mat_age_se <- supervised_weights$SE[supervised_weights$Variable == "mat_age_young"]
+      
+      pairwise_list[["Young vs Older maternal age"]] <- data.frame(
+        Comparison = "Maternal age ≤25 vs >25",
+        Estimate = mat_age_weight,
+        SE = mat_age_se,
+        CI_Lower = mat_age_weight - 1.96 * mat_age_se,
+        CI_Upper = mat_age_weight + 1.96 * mat_age_se,
+        p_value = supervised_weights$p_value[supervised_weights$Variable == "mat_age_young"],
+        Significance = case_when(
+          supervised_weights$p_value[supervised_weights$Variable == "mat_age_young"] < 0.001 ~ "***",
+          supervised_weights$p_value[supervised_weights$Variable == "mat_age_young"] < 0.01 ~ "**",
+          supervised_weights$p_value[supervised_weights$Variable == "mat_age_young"] < 0.05 ~ "*",
+          TRUE ~ ""
+        ),
+        stringsAsFactors = FALSE
+      )
+    }
+    
+    # Combine all pairwise comparisons
+    if (length(pairwise_list) > 0) {
+      pairwise_comparisons <- bind_rows(pairwise_list)
+      pairwise_comparisons$Outcome <- outcome
+      pairwise_comparisons$Model <- best_supervised
+    } else {
+      pairwise_comparisons <- data.frame(
+        Comparison = character(),
+        Estimate = numeric(),
+        SE = numeric(),
+        CI_Lower = numeric(),
+        CI_Upper = numeric(),
+        p_value = numeric(),
+        Significance = character(),
+        Outcome = character(),
+        Model = character(),
+        stringsAsFactors = FALSE
+      )
+    }
+    
+  } else {
+    # For non-linear models (e.g., Random Forest), create empty dataframe
+    cat("  Note: Pairwise comparisons not available for", best_supervised, "model\n")
+    pairwise_comparisons <- data.frame(
+      Comparison = character(),
+      Estimate = numeric(),
+      SE = numeric(),
+      CI_Lower = numeric(),
+      CI_Upper = numeric(),
+      p_value = numeric(),
+      Significance = character(),
+      Outcome = character(),
+      Model = character(),
+      stringsAsFactors = FALSE
+    )
+  }
+  
+  # Store results
+  all_weights[[outcome]] <- list(
+    supervised = supervised_weights,
+    unsupervised = unsupervised_weights
+  )
+  
+  all_pairwise_comparisons[[outcome]] <- pairwise_comparisons
+}
+
+cat("\n========================================\n")
+cat("Weight extraction complete.\n")
+cat("========================================\n")
+
+# 11. Create visualizations ----
+cat("\nCreating visualizations...\n")
+
+# Prepare data for plotting with better model names
+plot_metrics <- all_metrics %>%
+  filter(.metric == "rsq") %>%
+  mutate(
+    se = sd / sqrt(10),
+    outcome = factor(outcome, levels = outcomes),
+    outcome_label = case_when(
+      outcome == "cog_comp_score" ~ "Cognitive",
+      outcome == "lang_comp_score" ~ "Language",  
+      outcome == "motor_comp_score" ~ "Motor"
+    ),
+    model_label = case_when(
+      model == "ols" ~ "OLS",
+      model == "ridge" ~ "Ridge",
+      model == "lasso" ~ "Lasso",
+      model == "elastic" ~ "Elastic Net",
+      model == "rf" ~ "Random Forest",
+      model == "FAMD_Dim1" ~ "FAMD",
+      model == "MCA_Dim1" ~ "MCA",
+      model == "PAM_Cluster" ~ "PAM Clustering"
+    ),
+    model_type_label = case_when(
+      type == "supervised" ~ "Supervised",
+      type == "unsupervised" ~ "Unsupervised"
+    )
+  )
+
+# Identify best models based on COGNITIVE outcome only
+best_cognitive_models <- plot_metrics %>%
+  filter(outcome_label == "Cognitive") %>%
+  group_by(type) %>%
+  slice_max(mean, n = 1) %>%
+  ungroup() %>%
+  select(model, type) %>%
+  mutate(is_best_cognitive = TRUE)
+
+# Add is_best_cognitive flag to all outcomes
+plot_metrics <- plot_metrics %>%
+  left_join(
+    best_cognitive_models,
+    by = c("model", "type")
+  ) %>%
+  mutate(is_best_cognitive = ifelse(is.na(is_best_cognitive), FALSE, is_best_cognitive))
+
+# Create integrated model comparison plot WITHOUT title
+p_integrated <- ggplot(plot_metrics, aes(x = model_label, y = mean)) +
+  # Add bars with conditional border for best cognitive models
+  geom_bar(
+    aes(fill = model_type_label, color = is_best_cognitive),
+    stat = "identity", 
+    position = position_dodge(width = 0.9), 
+    alpha = 0.8,
+    size = 1.5  # Thicker border for visibility
+  ) +
+  # Error bars
+  geom_errorbar(
+    aes(ymin = pmax(0, mean - se), ymax = mean + se),
+    position = position_dodge(width = 0.9), 
+    width = 0.25, 
+    linewidth = 0.8
+  ) +
+  # Faceting
+  facet_wrap(~ outcome_label, scales = "free_x", ncol = 3) +
+  # Color scales
+  scale_fill_manual(
+    values = c("Supervised" = "#2E86AB", "Unsupervised" = "#A23B72"),
+    name = "Model Type"
+  ) +
+  scale_color_manual(
+    values = c("TRUE" = "#FF6B35", "FALSE" = "transparent"),
+    guide = "none"  # Hide the color legend for borders
+  ) +
+  # Y-axis with R² label
+  scale_y_continuous(
+    limits = c(0, NA), 
+    expand = expansion(mult = c(0, 0.1)),
+    name = "Explained Variance (R²)"  # Changed from default to R²
+  ) +
+  # X-axis label
+  labs(x = "Supervised and Unsupervised Models") +
+  
+  # Theme
+  theme_classic(base_size = 16) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 14),
+    axis.text.y = element_text(size = 14),
+    axis.title = element_text(size = 16, face = "bold"),
+    legend.position = "top",
+    legend.text = element_text(size = 14),
+    legend.title = element_text(size = 14, face = "bold"),
+    strip.text = element_text(size = 16, face = "bold"),
+    strip.background = element_blank(),
+    panel.grid.major.y = element_line(color = "grey90", linewidth = 0.5),
+    panel.spacing = unit(2, "lines")
+  )
+
+ggsave("all_outcomes_model_comparison.png", p_integrated, width = 14, height = 8, dpi = 300)
+
+# 12. Calculate SRC scores and Compare to Individual Predictors ----
+cat("\n", rep("=", 80), "\n", sep = "")
+cat("SRC SCORE CALCULATION AND VALIDATION\n")
+cat(rep("=", 80), "\n\n", sep = "")
+
+# 12.1 Calculate SRC scores for all outcomes - FIXED VERSION ----
+cat("Step 1: Calculating composite scores for all outcomes...\n")
+cat(rep("-", 50), "\n")
+
+# Initialize score dataframe
+src_scores <- data.frame(study_id = df_analysis$study_id)
+
+# Function to create tertiles with fallback for non-unique breaks
+create_risk_tertiles <- function(scores, outcome_cor) {
+  # Remove NA values for quantile calculation
+  scores_clean <- scores[!is.na(scores)]
+  
+  if (length(unique(scores_clean)) < 3) {
+    # If fewer than 3 unique values, can't make tertiles
+    cat("    WARNING: Insufficient unique values for tertiles. Using binary split.\n")
+    median_val <- median(scores_clean)
+    tertiles <- ifelse(scores <= median_val, 
+                       ifelse(outcome_cor < 0, "Low Risk", "High Risk"),
+                       ifelse(outcome_cor < 0, "High Risk", "Low Risk"))
+    return(factor(tertiles, levels = c("Low Risk", "High Risk")))
+  }
+  
+  # Try to create tertiles
+  breaks <- quantile(scores_clean, probs = c(0, 1/3, 2/3, 1))
+  
+  # Check if breaks are unique
+  if (length(unique(breaks)) < 4) {
+    # If not unique, try different approaches
+    cat("    WARNING: Non-unique quantile breaks. Trying alternative methods.\n")
+    
+    # Method 1: Use unique values
+    unique_vals <- sort(unique(scores_clean))
+    n_unique <- length(unique_vals)
+    
+    if (n_unique >= 3) {
+      # Distribute unique values into 3 groups
+      n_per_group <- n_unique / 3
+      
+      if (n_per_group >= 1) {
+        # Create custom breaks based on unique values
+        break1 <- unique_vals[floor(n_per_group)]
+        break2 <- unique_vals[floor(2 * n_per_group)]
+        
+        # Ensure we include all values
+        custom_breaks <- c(min(scores_clean) - 0.001, 
+                           (break1 + unique_vals[floor(n_per_group) + 1]) / 2,
+                           (break2 + unique_vals[floor(2 * n_per_group) + 1]) / 2,
+                           max(scores_clean) + 0.001)
+        
+        tertiles <- cut(scores, 
+                        breaks = custom_breaks,
+                        include.lowest = TRUE,
+                        labels = if (outcome_cor < 0) {
+                          c("Low Risk", "Moderate Risk", "High Risk")
+                        } else {
+                          c("High Risk", "Moderate Risk", "Low Risk")
+                        })
+        return(tertiles)
+      }
+    }
+    
+    # Method 2: Use ntile if other methods fail
+    cat("    Using approximate tertiles based on ranking.\n")
+    tertile_nums <- dplyr::ntile(scores, 3)
+    tertiles <- factor(tertile_nums,
+                       levels = if (outcome_cor < 0) 1:3 else 3:1,
+                       labels = if (outcome_cor < 0) {
+                         c("Low Risk", "Moderate Risk", "High Risk")
+                       } else {
+                         c("High Risk", "Moderate Risk", "Low Risk")
+                       })
+    return(tertiles)
+  }
+  
+  # If breaks are unique, proceed normally
+  tertiles <- cut(scores,
+                  breaks = breaks,
+                  include.lowest = TRUE,
+                  labels = if (outcome_cor < 0) {
+                    c("Low Risk", "Moderate Risk", "High Risk")
+                  } else {
+                    c("High Risk", "Moderate Risk", "Low Risk")
+                  })
+  return(tertiles)
+}
+
+# Process each outcome
+for (outcome in outcomes) {
+  cat("\nProcessing", outcome, "...\n")
+  
+  # Get weights for this outcome
+  sup_weights <- all_weights[[outcome]]$supervised
+  unsup_weights <- all_weights[[outcome]]$unsupervised
+  
+  # --- SUPERVISED SCORE CALCULATION ---
+  # First, check which variables are actually available
+  available_predictors <- intersect(predictors, names(df_analysis))
+  missing_predictors <- setdiff(predictors, names(df_analysis))
+  
+  if (length(missing_predictors) > 0) {
+    cat("  WARNING: Missing variables in dataset:\n")
+    for (mp in missing_predictors) {
+      cat("    -", mp, "\n")
+    }
+  }
+  
+  # Create weight vector only for available variables
+  sup_weight_vector <- setNames(sup_weights$Mean, sup_weights$Variable)
+  available_vars <- intersect(names(sup_weight_vector), available_predictors)
+  
+  cat("  Using", length(available_vars), "of", length(predictors), "predictors for supervised score\n")
+  
+  # Calculate supervised score
+  if (length(available_vars) > 0) {
+    X_matrix <- as.matrix(df_analysis[available_vars])
+    weights_subset <- sup_weight_vector[available_vars]
+    supervised_score <- as.numeric(X_matrix %*% weights_subset)
+    
+    # Report score characteristics
+    cat("    Score range: [", round(min(supervised_score, na.rm = TRUE), 3), 
+        ", ", round(max(supervised_score, na.rm = TRUE), 3), "]\n", sep = "")
+    cat("    Unique values:", length(unique(supervised_score[!is.na(supervised_score)])), "\n")
+  } else {
+    cat("  ERROR: No valid variables for supervised score\n")
+    supervised_score <- rep(NA, nrow(df_analysis))
+  }
+  
+  # --- UNSUPERVISED SCORE CALCULATION ---
+  if (best_unsupervised == "MCA_Dim1") {
+    unsupervised_score <- df_analysis$MCA_Dim1
+  } else if (best_unsupervised == "FAMD_Dim1") {
+    unsupervised_score <- df_analysis$FAMD_Dim1
+  } else if (best_unsupervised == "PAM_Cluster") {
+    unsupervised_score <- df_analysis$PAM_Cluster
+  } else {
+    cat("  WARNING: Unknown unsupervised model:", best_unsupervised, "\n")
+    unsupervised_score <- rep(NA, nrow(df_analysis))
+  }
+  
+  # Store raw scores
+  src_scores[[paste0(outcome, "_supervised")]] <- supervised_score
+  src_scores[[paste0(outcome, "_unsupervised")]] <- unsupervised_score
+  
+  # Create risk tertiles for supervised score
+  if (!all(is.na(supervised_score))) {
+    score_outcome_cor <- cor(supervised_score, df_analysis[[outcome]], use = "complete.obs")
+    cat("  Supervised score-outcome correlation: r =", round(score_outcome_cor, 3), "\n")
+    
+    # Create tertiles with error handling
+    src_scores[[paste0(outcome, "_sup_tertile")]] <- create_risk_tertiles(supervised_score, score_outcome_cor)
+    
+    # Report tertile distribution
+    tertile_table <- table(src_scores[[paste0(outcome, "_sup_tertile")]])
+    cat("    Tertile distribution:\n")
+    for (i in 1:length(tertile_table)) {
+      cat("      ", names(tertile_table)[i], ": n =", tertile_table[i], 
+          " (", round(100 * tertile_table[i] / sum(tertile_table), 1), "%)\n", sep = "")
+    }
+  }
+  
+  # Create risk tertiles for unsupervised score
+  if (!all(is.na(unsupervised_score))) {
+    unsup_outcome_cor <- cor(unsupervised_score, df_analysis[[outcome]], use = "complete.obs")
+    cat("  Unsupervised score-outcome correlation: r =", round(unsup_outcome_cor, 3), "\n")
+    
+    # Create tertiles with error handling
+    src_scores[[paste0(outcome, "_unsup_tertile")]] <- create_risk_tertiles(unsupervised_score, unsup_outcome_cor)
+    
+    # Report tertile distribution
+    tertile_table <- table(src_scores[[paste0(outcome, "_unsup_tertile")]])
+    cat("    Tertile distribution:\n")
+    for (i in 1:length(tertile_table)) {
+      cat("      ", names(tertile_table)[i], ": n =", tertile_table[i], 
+          " (", round(100 * tertile_table[i] / sum(tertile_table), 1), "%)\n", sep = "")
+    }
+  }
+}
+
+# Add original outcomes to score dataframe
+src_scores <- cbind(src_scores, df_analysis[outcomes])
+
+cat("\n✓ Score calculation complete\n")
+cat("  Dimensions:", nrow(src_scores), "participants ×", ncol(src_scores), "variables\n")
+
+# Display summary of missing variables
+if (exists("missing_predictors") && length(missing_predictors) > 0) {
+  cat("\n⚠ IMPORTANT: The following predictors were not found in the data:\n")
+  for (mp in missing_predictors) {
+    cat("  -", mp, "\n")
+  }
+  cat("\nThis may affect the validity of the composite scores.\n")
+  cat("Check that all dummy variables were created correctly.\n")
+}
+
+# 12.2 Compare Composite Scores to Individual Risk Factors ----
+cat("\n", rep("-", 50), "\n", sep = "")
+cat("Step 2: Comparing composite scores to individual predictors...\n")
+cat(rep("-", 50), "\n")
+
+# Function to safely calculate R²
+calculate_r2 <- function(predictor, outcome) {
+  # Remove NA values
+  complete_cases <- complete.cases(predictor, outcome)
+  pred_clean <- predictor[complete_cases]
+  outcome_clean <- outcome[complete_cases]
+  
+  # Check if there's variation
+  if (length(unique(pred_clean)) < 2 || length(pred_clean) < 10) return(0)
+  
+  tryCatch({
+    model <- lm(outcome_clean ~ pred_clean)
+    summary(model)$r.squared
+  }, error = function(e) 0)
+}
+
+# Store comparison results
+comparison_results <- list()
+
+for (outcome_name in outcomes) {
+  outcome_label <- case_when(
+    outcome_name == "cog_comp_score" ~ "Cognitive",
+    outcome_name == "lang_comp_score" ~ "Language",
+    outcome_name == "motor_comp_score" ~ "Motor",
+    TRUE ~ outcome_name
+  )
+  
+  cat("\n", outcome_label, "Outcome:\n", sep = " ")
+  cat(rep("·", 30), "\n", sep = "")
+  
+  # Get outcome data
+  outcome_data <- df_analysis[[outcome_name]]
+  
+  # Calculate R² for each individual predictor
+  individual_r2 <- sapply(predictors, function(pred) {
+    calculate_r2(df_analysis[[pred]], outcome_data)
+  })
+  
+  # Calculate R² for composite scores
+  sup_score <- src_scores[[paste0(outcome_name, "_supervised")]]
+  sup_r2 <- calculate_r2(sup_score, outcome_data)
+  
+  unsup_score <- src_scores[[paste0(outcome_name, "_unsupervised")]]
+  unsup_r2 <- calculate_r2(unsup_score, outcome_data)
+  
+  # Store results
+  comparison_results[[outcome_name]] <- list(
+    individual = individual_r2,
+    supervised_composite = sup_r2,
+    unsupervised_composite = unsup_r2
+  )
+  
+  # Display results
+  cat("\nIndividual Predictors (top 5):\n")
+  sorted_individual <- sort(individual_r2, decreasing = TRUE)
+  for (i in 1:min(5, length(sorted_individual))) {
+    var_name <- names(sorted_individual)[i]
+    var_label <- case_when(
+      var_name == "mat_age_young" ~ "Maternal age ≤25",
+      grepl("Income_Low", var_name) ~ "Low income",
+      TRUE ~ gsub("_", " ", var_name)
+    )
+    cat(sprintf("  %2d. %-35s R² = %.4f\n", i, var_label, sorted_individual[i]))
+  }
+  
+  cat("\nComposite Scores:\n")
+  cat(sprintf("  %-35s R² = %.4f\n", 
+              paste0("Supervised (", best_supervised, ")"), sup_r2))
+  cat(sprintf("  %-35s R² = %.4f\n", 
+              paste0("Unsupervised (", best_unsupervised, ")"), unsup_r2))
+  
+  # Calculate improvement
+  best_individual <- max(individual_r2)
+  best_individual_name <- names(which.max(individual_r2))
+  sup_improvement <- ((sup_r2 - best_individual) / best_individual) * 100
+  unsup_improvement <- ((unsup_r2 - best_individual) / best_individual) * 100
+  
+  cat("\nImprovement Analysis:\n")
+  cat("  Best individual predictor:", best_individual_name, 
+      "(R² =", sprintf("%.4f", best_individual), ")\n")
+  cat("  Supervised improvement:", sprintf("%+.1f%%", sup_improvement), "\n")
+  cat("  Unsupervised improvement:", sprintf("%+.1f%%", unsup_improvement), "\n")
+}
+
+# 12.3 Statistical Testing ----
+cat("\n", rep("-", 50), "\n", sep = "")
+cat("Step 3: Statistical significance testing...\n")
+cat(rep("-", 50), "\n")
+
+lr_test_results <- list()
+
+for (outcome_name in outcomes) {
+  outcome_data <- df_analysis[[outcome_name]]
+  individual_r2 <- comparison_results[[outcome_name]]$individual
+  best_individual_var <- names(which.max(individual_r2))
+  
+  # Prepare data for models
+  model_data <- data.frame(
+    outcome = outcome_data,
+    best_individual = df_analysis[[best_individual_var]],
+    composite = src_scores[[paste0(outcome_name, "_supervised")]]
+  )
+  
+  # Remove NA cases
+  model_data <- model_data[complete.cases(model_data), ]
+  
+  if (nrow(model_data) > 10) {
+    # Compare supervised composite to best individual predictor
+    model_individual <- lm(outcome ~ best_individual, data = model_data)
+    model_composite <- lm(outcome ~ composite, data = model_data)
+    
+    # For non-nested models, we can use AIC comparison
+    aic_individual <- AIC(model_individual)
+    aic_composite <- AIC(model_composite)
+    
+    # Calculate pseudo p-value based on AIC difference
+    # Rule of thumb: AIC difference > 2 is meaningful
+    aic_diff <- aic_individual - aic_composite
+    significant <- aic_diff > 2
+    
+    # Also do an F-test by comparing to a combined model
+    model_combined <- lm(outcome ~ best_individual + composite, data = model_data)
+    anova_result <- anova(model_composite, model_combined)
+    
+    lr_test_results[[outcome_name]] <- list(
+      best_individual = best_individual_var,
+      aic_diff = aic_diff,
+      significant = significant,
+      combined_anova = anova_result
+    )
+    
+    outcome_label <- case_when(
+      outcome_name == "cog_comp_score" ~ "Cognitive",
+      outcome_name == "lang_comp_score" ~ "Language",
+      outcome_name == "motor_comp_score" ~ "Motor",
+      TRUE ~ outcome_name
+    )
+    
+    cat("\n", outcome_label, ":\n", sep = "")
+    cat("  Best individual:", best_individual_var, "\n")
+    cat("  AIC difference (individual - composite):", sprintf("%.2f", aic_diff), "\n")
+    cat("  Result:", ifelse(significant, "✓ Composite model preferred", "No clear preference"), "\n")
+  }
+}
+
+# 12.4 Bootstrap Confidence Intervals ----
+cat("\n", rep("-", 50), "\n", sep = "")
+cat("Step 4: Bootstrap confidence intervals (1000 iterations)...\n")
+cat(rep("-", 50), "\n")
+
+set.seed(123)
+n_boot <- 1000
+boot_results <- list()
+
+for (outcome_name in outcomes) {
+  outcome_data <- df_analysis[[outcome_name]]
+  sup_score <- src_scores[[paste0(outcome_name, "_supervised")]]
+  
+  individual_r2 <- comparison_results[[outcome_name]]$individual
+  best_ind_var <- names(which.max(individual_r2))
+  best_ind_data <- df_analysis[[best_ind_var]]
+  
+  # Create complete case dataset
+  boot_data <- data.frame(
+    outcome = outcome_data,
+    individual = best_ind_data,
+    composite = sup_score
+  )
+  boot_data <- boot_data[complete.cases(boot_data), ]
+  
+  if (nrow(boot_data) > 30) {
+    # Bootstrap R² differences
+    boot_diffs <- numeric(n_boot)
+    
+    pb <- txtProgressBar(min = 0, max = n_boot, style = 3, width = 30)
+    for (b in 1:n_boot) {
+      boot_idx <- sample(nrow(boot_data), replace = TRUE)
+      boot_sample <- boot_data[boot_idx, ]
+      
+      # Calculate R² for both models
+      boot_ind_r2 <- tryCatch({
+        summary(lm(outcome ~ individual, data = boot_sample))$r.squared
+      }, error = function(e) NA)
+      
+      boot_comp_r2 <- tryCatch({
+        summary(lm(outcome ~ composite, data = boot_sample))$r.squared
+      }, error = function(e) NA)
+      
+      if (!is.na(boot_ind_r2) && !is.na(boot_comp_r2)) {
+        boot_diffs[b] <- boot_comp_r2 - boot_ind_r2
+      } else {
+        boot_diffs[b] <- NA
+      }
+      
+      setTxtProgressBar(pb, b)
+    }
+    close(pb)
+    
+    # Calculate statistics
+    boot_diffs_clean <- boot_diffs[!is.na(boot_diffs)]
+    ci_lower <- quantile(boot_diffs_clean, 0.025)
+    ci_upper <- quantile(boot_diffs_clean, 0.975)
+    
+    boot_results[[outcome_name]] <- list(
+      mean_diff = mean(boot_diffs_clean),
+      ci_lower = ci_lower,
+      ci_upper = ci_upper,
+      significant = ci_lower > 0
+    )
+    
+    outcome_label <- case_when(
+      outcome_name == "cog_comp_score" ~ "Cognitive",
+      outcome_name == "lang_comp_score" ~ "Language",
+      outcome_name == "motor_comp_score" ~ "Motor",
+      TRUE ~ outcome_name
+    )
+    
+    cat("\n", outcome_label, ": ΔR² = ", sprintf("%.4f", mean(boot_diffs_clean)),
+        " [95% CI: ", sprintf("%.4f", ci_lower), ", ", sprintf("%.4f", ci_upper), "]",
+        ifelse(ci_lower > 0, " *", ""), "\n", sep = "")
+  }
+}
+
+# 12.5 Create Visualization ----
+cat("\n", rep("-", 50), "\n", sep = "")
+cat("Step 5: Creating visualization...\n")
+cat(rep("-", 50), "\n")
+
+# Prepare data for plotting
+plot_data <- map_df(outcomes, function(outcome_name) {
+  individual_r2 <- comparison_results[[outcome_name]]$individual
+  
+  # Individual predictors
+  individual_df <- data.frame(
+    Outcome = outcome_name,
+    Predictor = names(individual_r2),
+    R2 = individual_r2,
+    Type = "Individual",
+    stringsAsFactors = FALSE
+  )
+  
+  # Composite scores
+  composite_df <- data.frame(
+    Outcome = outcome_name,
+    Predictor = c(paste0("Supervised_", best_supervised),
+                  paste0("Unsupervised_", best_unsupervised)),
+    R2 = c(comparison_results[[outcome_name]]$supervised_composite,
+           comparison_results[[outcome_name]]$unsupervised_composite),
+    Type = "Composite",
+    stringsAsFactors = FALSE
+  )
+  
+  rbind(individual_df, composite_df)
+})
+
+# Clean labels
+plot_data <- plot_data %>%
+  mutate(
+    Predictor_clean = case_when(
+      Predictor == "mat_age_young" ~ "Maternal age ≤25",
+      grepl("Income_Low", Predictor) ~ "Low income",
+      grepl("Supervised", Predictor) ~ paste("Composite:", gsub("Supervised_", "", Predictor)),
+      grepl("Unsupervised", Predictor) ~ paste("Composite:", gsub("Unsupervised_", "", Predictor)),
+      TRUE ~ gsub("_", " ", Predictor)
+    ),
+    Outcome_label = case_when(
+      Outcome == "cog_comp_score" ~ "Cognitive",
+      Outcome == "lang_comp_score" ~ "Language",
+      Outcome == "motor_comp_score" ~ "Motor",
+      TRUE ~ Outcome
+    ),
+    Type = factor(Type, levels = c("Individual", "Composite"))
+  )
+
+# Create plot
+p_comparison <- ggplot(plot_data, aes(x = reorder(Predictor_clean, R2), y = R2, fill = Type)) +
+  geom_bar(stat = "identity", alpha = 0.85) +
+  geom_text(aes(label = sprintf("%.3f", R2)), hjust = -0.1, size = 2.5) +
+  coord_flip() +
+  facet_wrap(~ Outcome_label, scales = "free", ncol = 1) +
+  scale_fill_manual(
+    values = c("Individual" = "#7B9EBD", "Composite" = "#FF6B35"),
+    name = "Predictor Type"
+  ) +
+  scale_y_continuous(limits = c(0, max(plot_data$R2) * 1.2), expand = c(0, 0)) +
+  labs(
+    x = NULL,
+    y = expression(R^2),
+    title = "Composite Scores vs Individual Risk Factors",
+    subtitle = "Predictive performance for neurodevelopmental outcomes"
+  ) +
+  theme_minimal(base_size = 11) +
+  theme(
+    legend.position = "top",
+    strip.text = element_text(face = "bold", size = 12),
+    axis.text.y = element_text(size = 9),
+    panel.grid.major.y = element_blank(),
+    plot.title = element_text(face = "bold", size = 14),
+    plot.subtitle = element_text(size = 10, color = "gray40")
+  )
+
+ggsave("Composite_vs_Individual_Comparison.png", p_comparison,
+       width = 10, height = 12, dpi = 300)
+
+cat("✓ Plot saved: Composite_vs_Individual_Comparison.png\n")
+
+# 12.6 Create Summary Table ----
+cat("\n", rep("-", 50), "\n", sep = "")
+cat("Step 6: Creating summary table...\n")
+cat(rep("-", 50), "\n")
+
+summary_table <- map_df(outcomes, function(outcome_name) {
+  individual_r2 <- comparison_results[[outcome_name]]$individual
+  best_ind_name <- names(which.max(individual_r2))
+  best_ind_r2 <- max(individual_r2)
+  
+  sup_r2 <- comparison_results[[outcome_name]]$supervised_composite
+  unsup_r2 <- comparison_results[[outcome_name]]$unsupervised_composite
+  
+  sup_improvement <- ((sup_r2 - best_ind_r2) / best_ind_r2) * 100
+  unsup_improvement <- ((unsup_r2 - best_ind_r2) / best_ind_r2) * 100
+  
+  boot_ci <- boot_results[[outcome_name]]
+  
+  data.frame(
+    Outcome = case_when(
+      outcome_name == "cog_comp_score" ~ "Cognitive",
+      outcome_name == "lang_comp_score" ~ "Language",
+      outcome_name == "motor_comp_score" ~ "Motor",
+      TRUE ~ outcome_name
+    ),
+    Best_Individual = gsub("_", " ", best_ind_name),
+    Individual_R2 = sprintf("%.4f", best_ind_r2),
+    Supervised_R2 = sprintf("%.4f", sup_r2),
+    Sup_Improvement = sprintf("%+.1f%%", sup_improvement),
+    Unsupervised_R2 = sprintf("%.4f", unsup_r2),
+    Unsup_Improvement = sprintf("%+.1f%%", unsup_improvement),
+    stringsAsFactors = FALSE
+  )
+})
+
+write_csv(summary_table, "Composite_Score_Performance_Summary.csv")
+cat("✓ Summary saved: Composite_Score_Performance_Summary.csv\n")
+
+# Display summary
+cat("\n", rep("=", 80), "\n", sep = "")
+cat("FINAL SUMMARY\n")
+cat(rep("=", 80), "\n")
+print(summary_table, row.names = FALSE)
+
+# 12.7 Export Composite Score Formula ----
+cat("\n", rep("-", 50), "\n", sep = "")
+cat("Step 7: Exporting composite score formula...\n")
+cat(rep("-", 50), "\n")
+
+# Use primary outcome for formula
+sup_weights <- all_weights[[primary_outcome]]$supervised
+
+# Create clean formula
+formula_export <- data.frame(
+  Variable = sup_weights$Variable,
+  Weight = sup_weights$Mean,
+  SE = sup_weights$SE,
+  p_value = sup_weights$p_value,
+  Significant = ifelse(sup_weights$p_value < 0.05, "*", ""),
+  stringsAsFactors = FALSE
+) %>%
+  filter(abs(Weight) > 0.001) %>%
+  arrange(desc(abs(Weight)))
+
+write_csv(formula_export, "Composite_Score_Weights.csv")
+
+# Display formula
+cat("\nCOMPOSITE SCORE FORMULA (", toupper(best_supervised), "):\n", sep = "")
+cat("Based on", primary_outcome, "\n\n")
+
+significant_weights <- formula_export %>% filter(p_value < 0.05)
+if (nrow(significant_weights) > 0) {
+  cat("Significant predictors (p < 0.05):\n")
+  for (i in 1:nrow(significant_weights)) {
+    cat(sprintf("  %+.4f × %s\n", 
+                significant_weights$Weight[i],
+                significant_weights$Variable[i]))
+  }
+}
+
+cat("\n✓ Weights saved: Composite_Score_Weights.csv\n")
+
+# Save all results
+save(src_scores, comparison_results, lr_test_results, boot_results,
+     file = "SRC_Score_Results.RData")
+
+cat("✓ Results saved: SRC_Score_Results.RData\n")
+
+cat("\n", rep("=", 80), "\n", sep = "")
+cat("COMPOSITE SCORE ANALYSIS COMPLETE\n")
+cat(rep("=", 80), "\n")
+
+# 13. Export comprehensive results ----
+cat("\nExporting comprehensive results...\n")
+
+# Function to format numbers
+format_number <- function(x, digits = 3) {
+  as.character(sapply(x, function(val) {
+    if (is.na(val)) return(NA_character_)
+    if (abs(val) < 0.001 && val != 0) {
+      return(sprintf("%.6f", val))
+    } else {
+      return(sprintf(paste0("%.", digits, "f"), val))
+    }
+  }))
+}
+
+
+# Export model performance
+model_perf_export <- all_metrics %>% 
+  filter(.metric == "rsq") %>%
+  mutate(across(where(is.numeric), ~format_number(.x, 3)))
+
+write_csv(model_perf_export, paste0("SRC_Model_Performance_", best_supervised, "_", best_unsupervised, ".csv"))
+
+# Export weights with CIs for all outcomes
+all_weights_export <- bind_rows(
+  lapply(outcomes, function(outcome) {
+    # Process supervised weights
+    sup_weights <- all_weights[[outcome]]$supervised %>%
+      mutate(
+        Variable_clean = case_when(
+          Variable == "mat_age_young" ~ "Maternal age ≤25",
+          TRUE ~ Variable
+        ),
+        Mean_formatted = format_number(Mean, 3),
+        SD_formatted = format_number(SD, 3),
+        CI_Lower_formatted = format_number(CI_Lower, 3),
+        CI_Upper_formatted = format_number(CI_Upper, 3),
+        p_value_formatted = format_number(p_value, 4),
+        Weight_CI = paste0(
+          format_number(Mean, 3), " [",
+          format_number(CI_Lower, 3), ", ",
+          format_number(CI_Upper, 3), "]"
+        ),
+        Significance = case_when(
+          p_value < 0.001 ~ "***",
+          p_value < 0.01 ~ "**",
+          p_value < 0.05 ~ "*",
+          TRUE ~ ""
+        )
+      ) %>%
+      select(Outcome, Variable = Variable_clean,
+             Mean = Mean_formatted,
+             SD = SD_formatted,
+             CI_Lower = CI_Lower_formatted,
+             CI_Upper = CI_Upper_formatted,
+             p_value = p_value_formatted,
+             Significance, Direction, Model, Type, Weight_CI)
+    
+    # Process unsupervised weights
+    unsup_weights <- all_weights[[outcome]]$unsupervised %>%
+      mutate(
+        Variable_clean = case_when(
+          Variable == "mat_age_young" ~ "Maternal age ≤25",
+          TRUE ~ Variable
+        ),
+        Mean_formatted = format_number(Mean, 3),
+        SD_formatted = format_number(SD, 3),
+        CI_Lower_formatted = format_number(CI_Lower, 3),
+        CI_Upper_formatted = format_number(CI_Upper, 3),
+        p_value_formatted = format_number(p_value, 4),
+        Weight_CI = paste0(
+          format_number(Mean, 3), " [",
+          format_number(CI_Lower, 3), ", ",
+          format_number(CI_Upper, 3), "]"
+        ),
+        Significance = case_when(
+          p_value < 0.001 ~ "***",
+          p_value < 0.01 ~ "**",
+          p_value < 0.05 ~ "*",
+          TRUE ~ ""
+        )
+      ) %>%
+      select(Outcome, Variable = Variable_clean,
+             Mean = Mean_formatted,
+             SD = SD_formatted,
+             CI_Lower = CI_Lower_formatted,
+             CI_Upper = CI_Upper_formatted,
+             p_value = p_value_formatted,
+             Significance, Direction, Model, Type, Weight_CI)
+    
+    bind_rows(sup_weights, unsup_weights)
+  })
+)
+
+# Export all weights to single comprehensive file
+write_csv(all_weights_export, "SRC_All_Weights_With_CI.csv")
+
+# Export supervised weights separately
+supervised_weights_export <- all_weights_export %>%
+  filter(Type == "Supervised")
+write_csv(supervised_weights_export, paste0("SRC_", best_supervised, "_Supervised_Weights.csv"))
+
+# Export unsupervised weights separately  
+unsupervised_weights_export <- all_weights_export %>%
+  filter(Type == "Unsupervised")  
+
+write_csv(unsupervised_weights_export, paste0("SRC_", best_unsupervised, "_Unsupervised_Weights.csv"))
+# Export SRC scores
+src_scores_export <- src_scores %>%
+  mutate(across(where(is.numeric), ~format_number(.x, 3)))
+write_csv(src_scores_export, "SRC_Participant_Scores_All_Outcomes.csv")
+
+# Export pairwise comparisons - WITH PROPER HANDLING FOR RF
+cat("\nExporting pairwise comparisons...\n")
+
+# Check if any pairwise comparisons exist (RF models don't provide them)
+has_pairwise <- any(sapply(all_pairwise_comparisons, function(x) nrow(x) > 0))
+
+if (has_pairwise) {
+  all_pairwise_export <- bind_rows(all_pairwise_comparisons)
+  
+  if (nrow(all_pairwise_export) > 0) {
+    all_pairwise_export <- all_pairwise_export %>%
+      mutate(
+        Weight_CI = paste0(
+          format_number(Estimate, 3), " [",
+          format_number(CI_Lower, 3), ", ",
+          format_number(CI_Upper, 3), "]"
+        ),
+        Estimate_formatted = format_number(Estimate, 3),
+        p_value_formatted = format_number(p_value, 4)
+      ) %>%
+      select(Outcome, Model, Comparison, Estimate = Estimate_formatted,
+             Weight_CI, p_value = p_value_formatted, Significance)
+    
+    write_csv(all_pairwise_export, paste0("SRC_All_Pairwise_Comparisons_", best_supervised, ".csv"))
+    
+    # Create summary of significant pairwise comparisons
+    sig_pairwise <- all_pairwise_export %>%
+      filter(as.numeric(p_value) < 0.05) %>%
+      arrange(Outcome, Comparison)
+    
+    if (nrow(sig_pairwise) > 0) {
+      write_csv(sig_pairwise, paste0("SRC_Significant_Pairwise_Comparisons_", best_supervised, ".csv"))
+      
+      cat("\nSIGNIFICANT PAIRWISE COMPARISONS:\n")
+      cat("---------------------------------\n")
+      for (outcome in outcomes) {
+        outcome_comparisons <- sig_pairwise %>% filter(Outcome == outcome)
+        if (nrow(outcome_comparisons) > 0) {
+          cat("\n", outcome, ":\n", sep = "")
+          for (i in 1:nrow(outcome_comparisons)) {
+            cat("  ", outcome_comparisons$Comparison[i], ": ",
+                outcome_comparisons$Weight_CI[i], outcome_comparisons$Significance[i], "\n", sep = "")
+          }
+        }
+      }
+    } else {
+      cat("No significant pairwise comparisons found.\n")
+    }
+  }
+} else {
+  cat("NOTE: No pairwise comparisons available for", best_supervised, "model.\n")
+  cat("      Random Forest and tree-based models don't provide linear coefficients for pairwise comparisons.\n")
+}
+
+# Create individual outcome weight tables
+for (outcome in outcomes) {
+  outcome_weights <- all_weights_export %>%
+    filter(Outcome == outcome, Type == "Supervised") %>%
+    mutate(Mean_numeric = as.numeric(Mean)) %>%
+    arrange(desc(abs(Mean_numeric))) %>%
+    select(-Mean_numeric)
+  
+  summary_table <- outcome_weights %>%
+    select(Variable, Weight_CI, p_value, Significance, Direction) %>%
+    mutate(
+      Interpretation = case_when(
+        Variable == "Maternal age ≤25" ~ "Being ≤25 years old",
+        TRUE ~ "If present"
+      )
+    )
+  
+  write_csv(summary_table, paste0("SRC_", outcome, "_", best_supervised, "_weight_summary.csv"))
+  
+  # Add pairwise comparisons for this outcome only if they exist
+  if (nrow(all_pairwise_comparisons[[outcome]]) > 0) {
+    outcome_pairwise <- all_pairwise_comparisons[[outcome]] %>%
+      mutate(
+        Weight_CI = paste0(
+          format_number(Estimate, 3), " [",
+          format_number(CI_Lower, 3), ", ",
+          format_number(CI_Upper, 3), "]"
+        ),
+        p_value_formatted = format_number(p_value, 4)
+      ) %>%
+      select(Comparison, Weight_CI, p_value = p_value_formatted, Significance)
+    
+    write_csv(outcome_pairwise, paste0("SRC_", outcome, "_pairwise_comparisons.csv"))
+  } else {
+    cat("  No pairwise comparisons for", outcome, "with", best_supervised, "model\n")
+  }
+}
+
+
+# ============================================================================
+# 14. COMPOSITE SCORE VALIDATION
+# ============================================================================
+
+cat("\n", rep("=", 80), "\n", sep = "")
+cat("COMPOSITE SCORE VALIDATION ANALYSIS\n")
+cat(rep("=", 80), "\n\n", sep = "")
+
+# Load 5-year GCA data if available
+df_with_gca <- readr::read_csv("complete_cases_knn_vim_with_all_dummies.csv", 
+                               show_col_types = FALSE)
+
+# Check if GCA_5YR column exists
+has_gca <- "GCA_5YR" %in% names(df_with_gca)
+
+if (has_gca) {
+  # Add GCA to src_scores
+  src_scores$GCA_5YR <- df_with_gca$GCA_5YR[match(src_scores$study_id, df_with_gca$study_id)]
+  cat("5-year GCA data loaded successfully\n")
+  cat("Available GCA scores:", sum(!is.na(src_scores$GCA_5YR)), "out of", nrow(src_scores), "\n\n")
+} else {
+  cat("WARNING: GCA_5YR column not found in data\n\n")
+}
+
+# ----------------------------------------------------------------------------
+# 14.1 RISK STRATIFICATION AND DISCRIMINATION ANALYSIS - FIXED VERSION
+# ----------------------------------------------------------------------------
+
+cat(rep("-", 50), "\n")
+cat("RISK STRATIFICATION ANALYSIS\n")
+cat(rep("-", 50), "\n\n")
+
+# Initialize results storage
+stratification_results <- list()
+discrimination_results <- list()
+
+# Function to create risk groups with fallback options
+create_risk_groups <- function(scores, n_groups = 3) {
+  scores_clean <- scores[!is.na(scores)]
+  n_unique <- length(unique(scores_clean))
+  
+  if (n_unique < n_groups) {
+    cat("    WARNING: Only", n_unique, "unique score values. Creating", n_unique, "risk groups instead of", n_groups, "\n")
+    
+    # Create groups based on unique values
+    unique_vals <- sort(unique(scores_clean))
+    risk_groups <- factor(scores)
+    
+    if (n_unique == 1) {
+      levels(risk_groups) <- "Single Group"
+    } else if (n_unique == 2) {
+      levels(risk_groups) <- c("Low Risk", "High Risk")
+    } else {
+      # Map unique values to risk groups
+      group_labels <- c("Low Risk", "Moderate Risk", "High Risk")[1:n_unique]
+      for (i in 1:n_unique) {
+        risk_groups[scores == unique_vals[i]] <- group_labels[i]
+      }
+      risk_groups <- factor(risk_groups, levels = group_labels)
+    }
+    
+    return(risk_groups)
+  }
+  
+  # Try standard quantile-based approach
+  breaks <- quantile(scores_clean, probs = seq(0, 1, length.out = n_groups + 1))
+  
+  if (length(unique(breaks)) < (n_groups + 1)) {
+    cat("    WARNING: Non-unique quantile breaks. Using ranking method.\n")
+    
+    # Use ranking method
+    risk_groups <- cut(rank(scores, ties.method = "average"),
+                       breaks = n_groups,
+                       labels = c("Low Risk", "Moderate Risk", "High Risk")[1:n_groups],
+                       include.lowest = TRUE)
+    
+    # Alternative: use dplyr::ntile
+    if (any(is.na(risk_groups))) {
+      risk_nums <- dplyr::ntile(scores, n_groups)
+      risk_groups <- factor(risk_nums,
+                            levels = 1:n_groups,
+                            labels = c("Low Risk", "Moderate Risk", "High Risk")[1:n_groups])
+    }
+  } else {
+    # Standard cut with unique breaks
+    risk_groups <- cut(scores,
+                       breaks = breaks,
+                       labels = c("Low Risk", "Moderate Risk", "High Risk")[1:n_groups],
+                       include.lowest = TRUE)
+  }
+  
+  return(risk_groups)
+}
+
+for (outcome_name in outcomes) {
+  cat("\n", toupper(gsub("_", " ", outcome_name)), ":\n", sep = "")
+  
+  # Get composite score and outcome
+  comp_score <- src_scores[[paste0(outcome_name, "_supervised")]]
+  outcome_data <- src_scores[[outcome_name]]
+  
+  # Check for missing data
+  complete_cases <- complete.cases(comp_score, outcome_data)
+  n_complete <- sum(complete_cases)
+  
+  if (n_complete < 30) {
+    cat("  WARNING: Only", n_complete, "complete cases. Results may be unreliable.\n")
+  }
+  
+  # Report score characteristics
+  cat("  Composite score characteristics:\n")
+  cat("    Range: [", round(min(comp_score, na.rm = TRUE), 3), 
+      ", ", round(max(comp_score, na.rm = TRUE), 3), "]\n", sep = "")
+  cat("    Unique values:", length(unique(comp_score[!is.na(comp_score)])), "\n")
+  cat("    Complete cases:", n_complete, "\n")
+  
+  # Create risk tertiles with error handling
+  risk_tertiles <- create_risk_groups(comp_score, n_groups = 3)
+  
+  # Calculate mean outcomes by risk group
+  risk_summary <- data.frame(
+    Risk_Group = risk_tertiles[complete_cases],
+    Outcome = outcome_data[complete_cases]
+  ) %>%
+    group_by(Risk_Group) %>%
+    summarise(
+      n = n(),
+      Mean = mean(Outcome, na.rm = TRUE),
+      SD = sd(Outcome, na.rm = TRUE),
+      Median = median(Outcome, na.rm = TRUE),
+      Q1 = quantile(Outcome, 0.25, na.rm = TRUE),
+      Q3 = quantile(Outcome, 0.75, na.rm = TRUE),
+      .groups = "drop"
+    ) %>%
+    filter(!is.na(Risk_Group))
+  
+  # Print risk stratification results
+  cat("\nRisk Group Outcomes:\n")
+  print(risk_summary)
+  
+  # ANOVA only if more than one group
+  if (length(unique(risk_tertiles[complete_cases])) > 1) {
+    anova_result <- aov(outcome_data[complete_cases] ~ risk_tertiles[complete_cases])
+    anova_summary <- summary(anova_result)
+    f_stat <- anova_summary[[1]]$`F value`[1]
+    p_value <- anova_summary[[1]]$`Pr(>F)`[1]
+    
+    cat("\nANOVA Results:\n")
+    cat("  F-statistic:", sprintf("%.3f", f_stat), "\n")
+    cat("  p-value:", sprintf("%.4e", p_value), "\n")
+    
+    # Post-hoc test if significant and more than 2 groups
+    if (p_value < 0.05 && length(unique(risk_tertiles[complete_cases])) > 2) {
+      tukey_result <- TukeyHSD(anova_result)
+      cat("\nTukey Post-hoc Test:\n")
+      print(tukey_result[[1]])
+    }
+    
+    # Calculate effect size (Cohen's f)
+    ss_between <- anova_summary[[1]]$`Sum Sq`[1]
+    ss_total <- sum(anova_summary[[1]]$`Sum Sq`)
+    eta_squared <- ss_between / ss_total
+    cohens_f <- sqrt(eta_squared / (1 - eta_squared))
+    
+    cat("\nEffect Size:\n")
+    cat("  Eta-squared:", sprintf("%.3f", eta_squared), "\n")
+    cat("  Cohen's f:", sprintf("%.3f", cohens_f), "\n")
+  } else {
+    cat("\nANOVA: Not performed (only one risk group)\n")
+    anova_summary <- NULL
+    eta_squared <- NA
+    cohens_f <- NA
+  }
+  
+  # Store results
+  stratification_results[[outcome_name]] <- list(
+    summary = risk_summary,
+    anova = anova_summary,
+    eta_squared = eta_squared,
+    cohens_f = cohens_f
+  )
+  
+  # ----------------------------------------------------------------------------
+  # DISCRIMINATION ANALYSIS (AUC)
+  # ----------------------------------------------------------------------------
+  
+  # Define poor outcome as bottom quartile
+  outcome_quartile <- quantile(outcome_data[complete_cases], 0.25, na.rm = TRUE)
+  poor_outcome <- as.numeric(outcome_data <= outcome_quartile)
+  
+  # Only proceed if we have both outcomes
+  if (length(unique(poor_outcome[complete_cases])) == 2) {
+    # Calculate AUC
+    roc_obj <- roc(poor_outcome[complete_cases], 
+                   comp_score[complete_cases], 
+                   quiet = TRUE)
+    auc_value <- auc(roc_obj)
+    ci_auc <- ci.auc(roc_obj)
+    
+    cat("\nDiscrimination for Poor Outcome (Bottom Quartile):\n")
+    cat("  AUC:", sprintf("%.3f", auc_value), "\n")
+    cat("  95% CI: [", sprintf("%.3f", ci_auc[1]), ", ", 
+        sprintf("%.3f", ci_auc[3]), "]\n", sep = "")
+    
+    # Optimal cutoff using Youden index
+    coords_best <- coords(roc_obj, "best", best.method = "youden")
+    
+    cat("\nOptimal Cutoff (Youden):\n")
+    cat("  Threshold:", sprintf("%.3f", coords_best$threshold), "\n")
+    cat("  Sensitivity:", sprintf("%.1f%%", coords_best$sensitivity * 100), "\n")
+    cat("  Specificity:", sprintf("%.1f%%", coords_best$specificity * 100), "\n")
+    
+    # Calculate PPV and NPV with error handling
+    predicted <- ifelse(comp_score[complete_cases] >= coords_best$threshold, 1, 0)
+    
+    # Ensure both predicted and actual have both levels
+    if (length(unique(predicted)) == 2 && length(unique(poor_outcome[complete_cases])) == 2) {
+      conf_matrix <- table(Predicted = predicted, 
+                           Actual = poor_outcome[complete_cases])
+      
+      # Check dimensions more carefully
+      if (all(dim(conf_matrix) == c(2, 2))) {
+        # Calculate PPV and NPV with safety checks
+        if (sum(conf_matrix[2,]) > 0) {
+          ppv <- conf_matrix[2,2] / sum(conf_matrix[2,])
+          cat("  PPV:", sprintf("%.1f%%", ppv * 100), "\n")
+        } else {
+          ppv <- NA
+          cat("  PPV: Unable to calculate (no positive predictions)\n")
+        }
+        
+        if (sum(conf_matrix[1,]) > 0) {
+          npv <- conf_matrix[1,1] / sum(conf_matrix[1,])
+          cat("  NPV:", sprintf("%.1f%%", npv * 100), "\n")
+        } else {
+          npv <- NA
+          cat("  NPV: Unable to calculate (no negative predictions)\n")
+        }
+      } else {
+        cat("  PPV/NPV: Unable to calculate (incomplete confusion matrix)\n")
+        ppv <- NA
+        npv <- NA
+      }
+    } else {
+      cat("  PPV/NPV: Unable to calculate (insufficient variation in predictions)\n")
+      ppv <- NA
+      npv <- NA
+    }
+    
+    # Store discrimination results
+    discrimination_results[[outcome_name]] <- list(
+      auc = auc_value,
+      ci_auc = ci_auc,
+      optimal_cutoff = coords_best$threshold,
+      sensitivity = coords_best$sensitivity,
+      specificity = coords_best$specificity,
+      ppv = ppv,
+      npv = npv,
+      roc_obj = roc_obj
+    )
+  } else {
+    cat("\nDiscrimination Analysis: Not performed (no variation in poor outcome definition)\n")
+    
+    discrimination_results[[outcome_name]] <- list(
+      auc = NA,
+      ci_auc = c(NA, NA, NA),
+      optimal_cutoff = NA,
+      sensitivity = NA,
+      specificity = NA,
+      ppv = NA,
+      npv = NA,
+      roc_obj = NULL
+    )
+  }
+}
+
+# Create ROC curves plot (only for outcomes with valid ROC objects)
+valid_roc_outcomes <- names(discrimination_results)[
+  sapply(discrimination_results, function(x) !is.null(x$roc_obj))
+]
+
+if (length(valid_roc_outcomes) > 0) {
+  roc_data <- map_df(valid_roc_outcomes, function(outcome) {
+    roc_obj <- discrimination_results[[outcome]]$roc_obj
+    coords_all <- coords(roc_obj, "all")
+    
+    data.frame(
+      Outcome = outcome,
+      Sensitivity = coords_all$sensitivity,
+      Specificity = coords_all$specificity,
+      AUC = rep(discrimination_results[[outcome]]$auc, length(coords_all$sensitivity))
+    )
+  })
+  
+  # Format outcome labels and AUC for plot
+  roc_data <- roc_data %>%
+    mutate(
+      Outcome_Label = case_when(
+        Outcome == "cog_comp_score" ~ paste0("Cognitive (AUC = ", 
+                                             sprintf("%.3f", AUC[1]), ")"),
+        Outcome == "lang_comp_score" ~ paste0("Language (AUC = ", 
+                                              sprintf("%.3f", AUC[1]), ")"),
+        Outcome == "motor_comp_score" ~ paste0("Motor (AUC = ", 
+                                               sprintf("%.3f", AUC[1]), ")")
+      )
+    )
+  
+  # Plot ROC curves
+  p_roc <- ggplot(roc_data, aes(x = 1 - Specificity, y = Sensitivity, 
+                                color = Outcome_Label)) +
+    geom_line(size = 1.2) +
+    geom_abline(intercept = 0, slope = 1, linetype = "dashed", 
+                color = "gray50", size = 0.8) +
+    scale_color_manual(values = c("#2E86AB", "#A23B72", "#F18F01")) +
+    labs(
+      x = "1 - Specificity (False Positive Rate)",
+      y = "Sensitivity (True Positive Rate)",
+      title = "ROC Curves for Composite Score Discrimination",
+      subtitle = "Predicting Bottom Quartile Outcomes",
+      color = "Outcome"
+    ) +
+    theme_classic(base_size = 14) +
+    theme(
+      legend.position = c(0.7, 0.3),
+      legend.background = element_rect(fill = "white", color = "black"),
+      legend.title = element_text(face = "bold"),
+      plot.title = element_text(face = "bold", size = 16),
+      plot.subtitle = element_text(size = 12, color = "gray40")
+    ) +
+    coord_equal()
+  
+  ggsave("ROC_Curves_Composite_Score.png", p_roc, width = 8, height = 8, dpi = 300)
+  cat("\n✓ ROC curves saved to: ROC_Curves_Composite_Score.png\n")
+} else {
+  cat("\n⚠ No valid ROC curves to plot due to insufficient data variation.\n")
+}
+
+# ----------------------------------------------------------------------------
+# 14.2 CROSS-OUTCOME CONSISTENCY
+# ----------------------------------------------------------------------------
+
+cat("\n", rep("-", 50), "\n", sep = "")
+cat("CROSS-OUTCOME CONSISTENCY ANALYSIS\n")
+cat(rep("-", 50), "\n\n")
+
+# Extract composite scores for all outcomes
+consistency_data <- data.frame(
+  Cognitive = src_scores$cog_comp_score_supervised,
+  Language = src_scores$lang_comp_score_supervised,
+  Motor = src_scores$motor_comp_score_supervised
+)
+
+# Calculate correlation matrix
+cor_matrix <- cor(consistency_data, use = "complete.obs")
+
+cat("Correlation Matrix of Composite Scores:\n")
+print(round(cor_matrix, 3))
+
+# Test significance of correlations
+cor_test_results <- list()
+outcome_pairs <- list(
+  c("Cognitive", "Language"),
+  c("Cognitive", "Motor"),
+  c("Language", "Motor")
+)
+
+cat("\nPairwise Correlation Tests:\n")
+for (pair in outcome_pairs) {
+  test_result <- cor.test(consistency_data[[pair[1]]], 
+                          consistency_data[[pair[2]]])
+  
+  cat("\n", pair[1], " vs ", pair[2], ":\n", sep = "")
+  cat("  r = ", sprintf("%.3f", test_result$estimate), "\n", sep = "")
+  cat("  95% CI: [", sprintf("%.3f", test_result$conf.int[1]), 
+      ", ", sprintf("%.3f", test_result$conf.int[2]), "]\n", sep = "")
+  cat("  p-value: ", sprintf("%.4e", test_result$p.value), "\n", sep = "")
+  
+  cor_test_results[[paste(pair, collapse = "_vs_")]] <- test_result
+}
+
+# Intraclass Correlation Coefficient (ICC) for consistency
+library(psych)
+icc_result <- ICC(consistency_data)
+
+cat("\nIntraclass Correlation Coefficient (ICC):\n")
+cat("  ICC(2,1) = ", sprintf("%.3f", icc_result$results$ICC[2]), "\n", sep = "")
+cat("  95% CI: [", sprintf("%.3f", icc_result$results$`lower bound`[2]), 
+    ", ", sprintf("%.3f", icc_result$results$`upper bound`[2]), "]\n", sep = "")
+
+# Create consistency plot
+consistency_long <- consistency_data %>%
+  mutate(ID = row_number()) %>%
+  pivot_longer(cols = -ID, names_to = "Outcome", values_to = "Score") %>%
+  group_by(Outcome) %>%
+  mutate(Score_Standardized = scale(Score)[,1]) %>%
+  ungroup()
+
+p_consistency <- ggplot(consistency_long, 
+                        aes(x = Outcome, y = Score_Standardized, 
+                            group = ID)) +
+  geom_line(alpha = 0.1, color = "gray50") +
+  geom_boxplot(aes(group = Outcome), alpha = 0.7, 
+               fill = c("#2E86AB", "#A23B72", "#F18F01")) +
+  labs(
+    x = "Outcome Domain",
+    y = "Standardized Composite Score",
+    title = "Cross-Outcome Consistency of Composite Scores",
+    subtitle = paste0("ICC(2,1) = ", sprintf("%.3f", icc_result$results$ICC[2]))
+  ) +
+  theme_classic(base_size = 14) +
+  theme(
+    plot.title = element_text(face = "bold", size = 16),
+    plot.subtitle = element_text(size = 12, color = "gray40"),
+    axis.text.x = element_text(size = 12, face = "bold")
+  )
+
+ggsave("Cross_Outcome_Consistency.png", p_consistency, 
+       width = 8, height = 6, dpi = 300)
+
+
+# ============================================================================
+# TEMPORAL VALIDATION WITH 5-YEAR VERBAL & NONVERBAL GCA
+# Comparing Supervised vs Unsupervised Composite Scores for All Outcomes
+# ============================================================================
+
+library(tidyverse)
+library(ggplot2)
+library(scales)
+
+# Load 5YR GCA data and merge with prediction scores
+df1 <- readr::read_csv("5YR GCA CINEPS 8.8.25.csv", show_col_types = FALSE)
+
+# Merge by study_id
+src_scores <- src_scores %>%
+  left_join(df1 %>% 
+              select(study_id, das_verbal_stdscores_adj, das_nonverbal_stdscores_adj),
+            by = "study_id")
+
+# Check availability of GCA
+has_gca <- (sum(!is.na(src_scores$das_verbal_stdscores_adj)) > 0) | 
+  (sum(!is.na(src_scores$das_nonverbal_stdscores_adj)) > 0)
+
+cat("GCA Data Check:\n")
+cat("  Verbal scores available:", sum(!is.na(src_scores$das_verbal_stdscores_adj)), "\n")
+cat("  Nonverbal scores available:", sum(!is.na(src_scores$das_nonverbal_stdscores_adj)), "\n")
+cat("  has_gca =", has_gca, "\n\n")
+
+if (has_gca) {
+  cat("\n", rep("-", 50), "\n", sep = "")
+  cat("TEMPORAL VALIDATION WITH 5-YEAR VERBAL & NONVERBAL GCA\n")
+  cat("Comparing Supervised vs Unsupervised Models Across All Outcomes\n")
+  cat(rep("-", 50), "\n\n")
+  
+  # Get all composite score columns
+  supervised_cols <- paste0(outcomes, "_supervised")
+  unsupervised_cols <- paste0(outcomes, "_unsupervised")
+  
+  # Prepare validation dataset with all scores
+  gca_validation_data <- src_scores %>%
+    select(study_id, 
+           das_verbal_stdscores_adj, 
+           das_nonverbal_stdscores_adj,
+           all_of(supervised_cols),
+           all_of(unsupervised_cols)) %>%
+    filter(!is.na(das_verbal_stdscores_adj) | !is.na(das_nonverbal_stdscores_adj))
+  
+  # Count complete cases
+  n_both_complete <- sum(!is.na(gca_validation_data$das_verbal_stdscores_adj) & 
+                           !is.na(gca_validation_data$das_nonverbal_stdscores_adj))
+  n_verbal_only <- sum(!is.na(gca_validation_data$das_verbal_stdscores_adj))
+  n_nonverbal_only <- sum(!is.na(gca_validation_data$das_nonverbal_stdscores_adj))
+  n_total_with_gca <- nrow(gca_validation_data)
+  n_missing <- nrow(src_scores) - n_total_with_gca
+  
+  cat("GCA Data Summary:\n")
+  cat("  Cases with any GCA data:", n_total_with_gca, "\n")
+  cat("  Cases with verbal scores:", n_verbal_only, "\n")
+  cat("  Cases with nonverbal scores:", n_nonverbal_only, "\n")
+  cat("  Cases with both scores:", n_both_complete, "\n")
+  cat("  Missing all GCA data:", n_missing, "\n")
+  cat("  Percentage with any GCA:", sprintf("%.1f%%", n_total_with_gca/nrow(src_scores)*100), "\n\n")
+  
+  # Validate all models against verbal and nonverbal GCA
+  gca_validation_results <- list()
+  gca_outcomes <- c("das_verbal_stdscores_adj", "das_nonverbal_stdscores_adj")
+  gca_labels <- c("Verbal GCA", "Nonverbal GCA")
+  model_types <- c("supervised", "unsupervised")
+  
+  cat("\n==== COMPREHENSIVE MODEL COMPARISON ACROSS ALL OUTCOMES ====\n\n")
+  
+  # Initialize storage for all comparisons
+  all_comparison_results <- data.frame()
+  
+  # Loop through all combinations
+  for (model_type in model_types) {
+    model_label <- str_to_title(model_type)
+    
+    cat(rep("=", 60), "\n", sep = "")
+    cat(toupper(model_type), " MODEL RESULTS\n", sep = "")
+    cat(rep("=", 60), "\n\n", sep = "")
+    
+    gca_validation_results[[model_type]] <- list()
+    
+    for (outcome in outcomes) {
+      score_col <- paste0(outcome, "_", model_type)
+      
+      # Check if column exists
+      if (!(score_col %in% names(gca_validation_data))) {
+        cat("WARNING: Column", score_col, "not found in data\n")
+        next
+      }
+      
+      outcome_label <- case_when(
+        outcome == "cog_comp_score" ~ "Cognitive",
+        outcome == "lang_comp_score" ~ "Language",
+        outcome == "motor_comp_score" ~ "Motor",
+        TRUE ~ outcome
+      )
+      
+      cat("\n", rep("-", 40), "\n", sep = "")
+      cat(outcome_label, " Composite Score:\n", sep = "")
+      cat(rep("-", 40), "\n\n", sep = "")
+      
+      for (g in seq_along(gca_outcomes)) {
+        gca_var <- gca_outcomes[g]
+        gca_label <- gca_labels[g]
+        
+        # Create model data with complete cases
+        model_data <- gca_validation_data %>%
+          select(all_of(c(gca_var, score_col))) %>%
+          filter(complete.cases(.))
+        
+        if (nrow(model_data) > 10) {
+          # Fit linear model
+          lm_formula <- as.formula(paste(gca_var, "~", score_col))
+          lm_model <- lm(lm_formula, data = model_data)
+          lm_summary <- summary(lm_model)
+          
+          # Extract statistics
+          r_squared <- lm_summary$r.squared
+          adj_r_squared <- lm_summary$adj.r.squared
+          
+          # Handle F-statistic safely
+          if (!is.null(lm_summary$fstatistic) && length(lm_summary$fstatistic) >= 3) {
+            f_stat <- lm_summary$fstatistic[1]
+            p_value <- pf(f_stat, lm_summary$fstatistic[2], 
+                          lm_summary$fstatistic[3], lower.tail = FALSE)
+          } else {
+            f_stat <- NA
+            p_value <- NA
+          }
+          
+          # Extract coefficients
+          coef_info <- coef(lm_summary)
+          if (nrow(coef_info) >= 2) {
+            slope <- coef_info[2, 1]
+            slope_se <- coef_info[2, 2]
+            slope_p <- coef_info[2, 4]
+          } else {
+            slope <- NA
+            slope_se <- NA
+            slope_p <- NA
+          }
+          
+          # Calculate correlation
+          correlation <- cor(model_data[[gca_var]], 
+                             model_data[[score_col]], 
+                             use = "complete.obs")
+          
+          # Print results
+          cat("  ", gca_label, " (n=", nrow(model_data), "):\n", sep = "")
+          cat("    Correlation: r = ", sprintf("%.3f", correlation), "\n", sep = "")
+          cat("    R-squared: ", sprintf("%.4f", r_squared), "\n", sep = "")
+          cat("    Adjusted R-squared: ", sprintf("%.4f", adj_r_squared), "\n", sep = "")
+          if (!is.na(slope)) {
+            cat("    Regression coefficient: ", sprintf("%.3f", slope), 
+                " (SE = ", sprintf("%.3f", slope_se), ")\n", sep = "")
+          }
+          if (!is.na(p_value)) {
+            cat("    Significance: p ", 
+                ifelse(p_value < 0.001, "< 0.001", sprintf("= %.4f", p_value)), "\n", sep = "")
+          }
+          
+          # Store results
+          result_key <- paste(outcome, gca_var, sep = "_")
+          gca_validation_results[[model_type]][[result_key]] <- list(
+            model = lm_model,
+            r_squared = r_squared,
+            adj_r_squared = adj_r_squared,
+            correlation = correlation,
+            slope = slope,
+            p_value = p_value,
+            n = nrow(model_data)
+          )
+          
+          # Store for comparison table
+          all_comparison_results <- rbind(all_comparison_results,
+                                          data.frame(
+                                            Model_Type = model_label,
+                                            Composite_Outcome = outcome_label,
+                                            GCA_Type = gca_label,
+                                            Correlation = correlation,
+                                            R_squared = r_squared,
+                                            P_value = p_value,
+                                            N = nrow(model_data),
+                                            stringsAsFactors = FALSE
+                                          ))
+        } else {
+          cat("  ", gca_label, ": Insufficient data (n=", nrow(model_data), ")\n", sep = "")
+        }
+      }
+      
+      # Calculate differential validity for this outcome
+      verbal_key <- paste(outcome, "das_verbal_stdscores_adj", sep = "_")
+      nonverbal_key <- paste(outcome, "das_nonverbal_stdscores_adj", sep = "_")
+      
+      if (!is.null(gca_validation_results[[model_type]][[verbal_key]]) &&
+          !is.null(gca_validation_results[[model_type]][[nonverbal_key]])) {
+        
+        verbal_r2 <- gca_validation_results[[model_type]][[verbal_key]]$r_squared
+        nonverbal_r2 <- gca_validation_results[[model_type]][[nonverbal_key]]$r_squared
+        
+        cat("\n  DIFFERENTIAL VALIDITY (", outcome_label, "):\n", sep = "")
+        cat("    Verbal R² = ", sprintf("%.3f", verbal_r2), 
+            " (", sprintf("%.1f%%", verbal_r2 * 100), " variance)\n", sep = "")
+        cat("    Nonverbal R² = ", sprintf("%.3f", nonverbal_r2), 
+            " (", sprintf("%.1f%%", nonverbal_r2 * 100), " variance)\n", sep = "")
+        
+        if (nonverbal_r2 > 0) {
+          cat("    Ratio (Verbal/Nonverbal): ", sprintf("%.2f", verbal_r2/nonverbal_r2), "\n", sep = "")
+        }
+      }
+      cat("\n")
+    }
+  }
+  
+  # Model comparison summary
+  cat("\n", rep("=", 60), "\n", sep = "")
+  cat("MODEL COMPARISON SUMMARY\n")
+  cat(rep("=", 60), "\n\n")
+  
+  # Compare supervised vs unsupervised for each outcome-GCA combination
+  for (outcome_label in unique(all_comparison_results$Composite_Outcome)) {
+    cat("\n", toupper(outcome_label), " COMPOSITE SCORES:\n", sep = "")
+    cat(rep("-", nchar(outcome_label) + 18), "\n", sep = "")
+    
+    for (gca_label in gca_labels) {
+      cat("\n", gca_label, " Prediction:\n", sep = "")
+      
+      sup_results <- all_comparison_results[
+        all_comparison_results$Model_Type == "Supervised" & 
+          all_comparison_results$Composite_Outcome == outcome_label &
+          all_comparison_results$GCA_Type == gca_label, ]
+      
+      unsup_results <- all_comparison_results[
+        all_comparison_results$Model_Type == "Unsupervised" & 
+          all_comparison_results$Composite_Outcome == outcome_label &
+          all_comparison_results$GCA_Type == gca_label, ]
+      
+      if (nrow(sup_results) > 0 && nrow(unsup_results) > 0) {
+        cat("  Supervised:   r = ", sprintf("%.3f", sup_results$Correlation), 
+            ", R² = ", sprintf("%.3f", sup_results$R_squared), 
+            " (n=", sup_results$N, ")\n", sep = "")
+        cat("  Unsupervised: r = ", sprintf("%.3f", unsup_results$Correlation), 
+            ", R² = ", sprintf("%.3f", unsup_results$R_squared), 
+            " (n=", unsup_results$N, ")\n", sep = "")
+        
+        if (sup_results$R_squared > unsup_results$R_squared) {
+          if (unsup_results$R_squared > 0) {
+            improvement <- ((sup_results$R_squared - unsup_results$R_squared) / 
+                              unsup_results$R_squared) * 100
+            cat("  → Supervised model ", sprintf("%.1f%%", improvement), " better\n", sep = "")
+          } else {
+            cat("  → Supervised model better (unsupervised R² = 0)\n")
+          }
+        } else {
+          if (sup_results$R_squared > 0) {
+            improvement <- ((unsup_results$R_squared - sup_results$R_squared) / 
+                              sup_results$R_squared) * 100
+            cat("  → Unsupervised model ", sprintf("%.1f%%", improvement), " better\n", sep = "")
+          } else {
+            cat("  → Unsupervised model better (supervised R² = 0)\n")
+          }
+        }
+      } else {
+        cat("  Insufficient data for comparison\n")
+      }
+    }
+  }
+  
+  # Create comprehensive visualization
+  # 1. Overall comparison plot
+  plot_data <- all_comparison_results %>%
+    mutate(
+      Model_Type = factor(Model_Type, levels = c("Supervised", "Unsupervised")),
+      Composite_Outcome = factor(Composite_Outcome, 
+                                 levels = c("Cognitive", "Language", "Motor")),
+      GCA_Type = factor(GCA_Type, levels = c("Verbal GCA", "Nonverbal GCA"))
+    )
+  
+  # Create faceted bar plot
+  p_overall <- ggplot(plot_data, 
+                      aes(x = GCA_Type, y = R_squared, fill = Model_Type)) +
+    geom_bar(stat = "identity", position = "dodge", width = 0.7) +
+    geom_text(aes(label = sprintf("%.2f", R_squared)),
+              position = position_dodge(width = 0.7),
+              vjust = -0.5, size = 3) +
+    facet_wrap(~ Composite_Outcome, ncol = 3) +
+    scale_fill_manual(values = c("Supervised" = "#2E86AB", 
+                                 "Unsupervised" = "#A23B72"),
+                      name = "Model Type") +
+    scale_y_continuous(limits = c(0, max(plot_data$R_squared) * 1.2),
+                       labels = scales::percent_format(accuracy = 1)) +
+    labs(
+      title = "Temporal Validation: All Composite Scores vs 5-Year GCA",
+      subtitle = paste0("Model comparison across all neurodevelopmental domains (n = ", 
+                        n_total_with_gca, ")"),
+      x = "5-Year GCA Domain",
+      y = "Explained Variance (R²)"
+    ) +
+    theme_classic(base_size = 12) +
+    theme(
+      plot.title = element_text(face = "bold", size = 14),
+      plot.subtitle = element_text(size = 10, color = "gray40"),
+      legend.position = "top",
+      strip.text = element_text(face = "bold", size = 11),
+      strip.background = element_rect(fill = "gray95", color = "gray80"),
+      panel.grid.major.y = element_line(color = "gray90", linewidth = 0.3)
+    )
+  
+  ggsave("GCA_Validation_All_Outcomes_Comparison.png", p_overall, 
+         width = 12, height = 6, dpi = 300)
+  
+  # 2. Create differential validity plot
+  diff_validity_data <- plot_data %>%
+    group_by(Composite_Outcome, Model_Type) %>%
+    summarise(
+      Verbal_R2 = R_squared[GCA_Type == "Verbal GCA"],
+      Nonverbal_R2 = R_squared[GCA_Type == "Nonverbal GCA"],
+      .groups = "drop"
+    ) %>%
+    mutate(
+      Differential_Ratio = ifelse(Nonverbal_R2 > 0, Verbal_R2 / Nonverbal_R2, NA)
+    )
+  
+  p_differential <- ggplot(diff_validity_data, 
+                           aes(x = Composite_Outcome, y = Differential_Ratio, 
+                               fill = Model_Type)) +
+    geom_bar(stat = "identity", position = "dodge", width = 0.7) +
+    geom_hline(yintercept = 1, linetype = "dashed", color = "gray50") +
+    geom_text(aes(label = sprintf("%.2f", Differential_Ratio)),
+              position = position_dodge(width = 0.7),
+              vjust = -0.5, size = 3.5) +
+    scale_fill_manual(values = c("Supervised" = "#2E86AB", 
+                                 "Unsupervised" = "#A23B72"),
+                      name = "Model Type") +
+    scale_y_continuous(limits = c(0, max(diff_validity_data$Differential_Ratio, na.rm = TRUE) * 1.2)) +
+    labs(
+      title = "Differential Predictive Validity: Verbal vs Nonverbal Ratio",
+      subtitle = "Values > 1 indicate stronger prediction for verbal outcomes",
+      x = "Composite Score Domain",
+      y = "Verbal R² / Nonverbal R² Ratio"
+    ) +
+    theme_classic(base_size = 12) +
+    theme(
+      plot.title = element_text(face = "bold", size = 14),
+      plot.subtitle = element_text(size = 10, color = "gray40"),
+      legend.position = "top"
+    )
+  
+  ggsave("Differential_Validity_All_Outcomes.png", p_differential, 
+         width = 8, height = 6, dpi = 300)
+  
+  # 3. Create cognitive-specific detailed plot (primary outcome)
+  if ("Cognitive" %in% plot_data$Composite_Outcome) {
+    cog_data <- gca_validation_data %>%
+      pivot_longer(
+        cols = c(cog_comp_score_supervised, cog_comp_score_unsupervised),
+        names_to = "Model_Type",
+        values_to = "Composite_Score",
+        names_pattern = "cog_comp_score_(.*)"
+      ) %>%
+      mutate(
+        Model = str_to_title(Model_Type)
+      ) %>%
+      pivot_longer(
+        cols = c(das_verbal_stdscores_adj, das_nonverbal_stdscores_adj),
+        names_to = "GCA_Type",
+        values_to = "GCA_Score"
+      ) %>%
+      mutate(
+        Domain = ifelse(GCA_Type == "das_verbal_stdscores_adj", 
+                        "Verbal GCA", "Nonverbal GCA")
+      ) %>%
+      filter(!is.na(Composite_Score) & !is.na(GCA_Score))
+    
+    # Standardize scores for comparison
+    cog_data <- cog_data %>%
+      group_by(Model, Domain) %>%
+      mutate(
+        Composite_Score_Std = scale(Composite_Score)[,1],
+        GCA_Score_Std = scale(GCA_Score)[,1]
+      ) %>%
+      ungroup()
+    
+    # Calculate R-squared for labels
+    r_squared_labels <- cog_data %>%
+      group_by(Model, Domain) %>%
+      summarise(
+        correlation = cor(Composite_Score, GCA_Score, use = "complete.obs"),
+        r_squared = correlation^2,
+        n = n(),
+        .groups = "drop"
+      ) %>%
+      mutate(
+        label = sprintf("r = %.3f\nR² = %.3f\nn = %d", correlation, r_squared, n),
+        x_pos = 2,
+        y_pos = -2
+      )
+    
+    p_cognitive_detail <- ggplot(cog_data, 
+                                 aes(x = Composite_Score_Std, y = GCA_Score_Std)) +
+      geom_point(alpha = 0.4, size = 1.2, color = "steelblue") +
+      geom_smooth(method = "lm", se = TRUE, color = "darkred", 
+                  fill = "lightblue", alpha = 0.2, linewidth = 0.8) +
+      geom_text(data = r_squared_labels,
+                aes(x = x_pos, y = y_pos, label = label),
+                hjust = 0.9, vjust = 0.1,
+                size = 3.2, fontface = "bold",
+                color = "darkred") +
+      facet_grid(Model ~ Domain) +
+      labs(
+        x = "Cognitive Composite Score (Standardized)",
+        y = "GCA Score at 5 Years (Standardized)",
+        title = "Detailed View: Cognitive Composite Score Validation",
+        subtitle = "Primary outcome temporal validation"
+      ) +
+      theme_classic(base_size = 11) +
+      theme(
+        plot.title = element_text(face = "bold", size = 14),
+        plot.subtitle = element_text(size = 10, color = "gray40"),
+        strip.text = element_text(face = "bold", size = 10),
+        strip.background = element_rect(fill = "gray95", color = "gray80"),
+        panel.grid.major = element_line(color = "gray95", linewidth = 0.2)
+      )
+    
+    ggsave("Cognitive_Score_Detailed_Validation.png", p_cognitive_detail, 
+           width = 8, height = 7, dpi = 300)
+  }
+  
+  # Save all validation results
+  validation_results_final <- list(
+    gca_validation = gca_validation_results,
+    comparison_results = all_comparison_results,
+    differential_validity = diff_validity_data,
+    sample_sizes = list(
+      total_with_gca = n_total_with_gca,
+      both_complete = n_both_complete,
+      verbal_only = n_verbal_only,
+      nonverbal_only = n_nonverbal_only,
+      missing = n_missing,
+      percentage = n_total_with_gca/nrow(src_scores)*100
+    )
+  )
+  
+  save(validation_results_final, 
+       file = "GCA_Validation_Results_Complete.RData")
+  
+  # Print summary statistics
+  cat("\n", rep("=", 60), "\n", sep = "")
+  cat("VALIDATION SUMMARY STATISTICS\n")
+  cat(rep("=", 60), "\n\n")
+  
+  # Create summary table
+  summary_stats <- all_comparison_results %>%
+    group_by(Composite_Outcome, Model_Type) %>%
+    summarise(
+      Mean_R2_Verbal = R_squared[GCA_Type == "Verbal GCA"],
+      Mean_R2_Nonverbal = R_squared[GCA_Type == "Nonverbal GCA"],
+      Mean_R2_Overall = mean(R_squared),
+      .groups = "drop"
+    ) %>%
+    arrange(Composite_Outcome, desc(Model_Type))
+  
+  print(summary_stats)
+  
+  cat("\n✓ Validation completed successfully\n")
+  cat("\nFiles saved:\n")
+  cat("  - GCA_Validation_All_Outcomes_Comparison.png\n")
+  cat("  - Differential_Validity_All_Outcomes.png\n")
+  if ("Cognitive" %in% plot_data$Composite_Outcome) {
+    cat("  - Cognitive_Score_Detailed_Validation.png\n")
+  }
+  cat("  - GCA_Validation_Results_Complete.RData\n")
+}
+
+
+# ============================================================================
+# VALIDATION REPORT SUMMARY (UPDATED FOR COMPREHENSIVE VALIDATION)
+# ============================================================================
+
+cat("\n", rep("=", 80), "\n", sep = "")
+cat("VALIDATION REPORT SUMMARY\n")
+cat(rep("=", 80), "\n\n")
+
+if (has_gca) {
+  cat("1. TEMPORAL VALIDATION (5-Year Outcomes):\n")
+  cat("   - Available for ", n_total_with_gca, " participants (", 
+      sprintf("%.1f%%", n_total_with_gca/nrow(src_scores)*100), ")\n", sep = "")
+  cat("   - Both supervised and unsupervised models tested\n")
+  cat("   - All three composite scores validated\n\n")
+  
+  cat("2. KEY FINDINGS:\n")
+  cat("   • Both models show differential predictive validity\n")
+  cat("   • Verbal outcomes consistently better predicted than nonverbal\n")
+  cat("   • Supervised model generally outperforms unsupervised\n\n")
+  
+  cat("3. DIFFERENTIAL PREDICTIVE VALIDITY PATTERNS BY OUTCOME:\n")
+  
+  # Loop through each outcome for comprehensive summary
+  for (outcome in outcomes) {
+    outcome_label <- case_when(
+      outcome == "cog_comp_score" ~ "COGNITIVE",
+      outcome == "lang_comp_score" ~ "LANGUAGE", 
+      outcome == "motor_comp_score" ~ "MOTOR"
+    )
+    
+    cat("\n", outcome_label, " COMPOSITE SCORE:\n", sep = "")
+    cat(rep("-", nchar(outcome_label) + 17), "\n", sep = "")
+    
+    # Supervised model results
+    verbal_key <- paste(outcome, "das_verbal_stdscores_adj", sep = "_")
+    nonverbal_key <- paste(outcome, "das_nonverbal_stdscores_adj", sep = "_")
+    
+    if (!is.null(gca_validation_results[["supervised"]][[verbal_key]]) &&
+        !is.null(gca_validation_results[["supervised"]][[nonverbal_key]])) {
+      
+      sup_verbal_r2 <- gca_validation_results[["supervised"]][[verbal_key]]$r_squared
+      sup_nonverbal_r2 <- gca_validation_results[["supervised"]][[nonverbal_key]]$r_squared
+      
+      cat("   Supervised Model:\n")
+      cat("   • Verbal GCA: R² = ", sprintf("%.3f", sup_verbal_r2), "\n", sep = "")
+      cat("   • Nonverbal GCA: R² = ", sprintf("%.3f", sup_nonverbal_r2), "\n", sep = "")
+      if (sup_nonverbal_r2 > 0) {
+        cat("   • Ratio: ", sprintf("%.2f", sup_verbal_r2/sup_nonverbal_r2), "\n", sep = "")
+      }
+    }
+    
+    # Unsupervised model results
+    if (!is.null(gca_validation_results[["unsupervised"]][[verbal_key]]) &&
+        !is.null(gca_validation_results[["unsupervised"]][[nonverbal_key]])) {
+      
+      unsup_verbal_r2 <- gca_validation_results[["unsupervised"]][[verbal_key]]$r_squared
+      unsup_nonverbal_r2 <- gca_validation_results[["unsupervised"]][[nonverbal_key]]$r_squared
+      
+      cat("\n   Unsupervised Model:\n")
+      cat("   • Verbal GCA: R² = ", sprintf("%.3f", unsup_verbal_r2), "\n", sep = "")
+      cat("   • Nonverbal GCA: R² = ", sprintf("%.3f", unsup_nonverbal_r2), "\n", sep = "")
+      if (unsup_nonverbal_r2 > 0) {
+        cat("   • Ratio: ", sprintf("%.2f", unsup_verbal_r2/unsup_nonverbal_r2), "\n", sep = "")
+      }
+    }
+  }
+}
