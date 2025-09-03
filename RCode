@@ -46,7 +46,7 @@ employment_vars <- c("Employment_Employed", "Employment_Stay-at-home caregiver",
 family_vars     <- c("Family_Cohabiting", "Family_Married", "Family_Single")
 
 # ============================================================================
-# INCOME FIX: Combine Middle+High as reference category
+# Combine Middle+High as reference category
 # ============================================================================
 cat("\n*** APPLYING INCOME FIX: Combining Middle+High as reference ***\n")
 
