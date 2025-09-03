@@ -264,34 +264,12 @@
             box-shadow: inset 0 2px 4px rgba(0,0,0,0.1);
         }
         
-        .ci-line {
+        .ci-range-bar {
             position: absolute;
-            top: 0;
-            width: 2px;
-            height: 35px;
-            background: #1887ab;
-            opacity: 0.8;
-            transition: left 0.5s ease;
-        }
-        
-        .ci-line.lower::after {
-            content: 'L';
-            position: absolute;
-            bottom: -18px;
-            left: -4px;
-            font-size: 10px;
-            font-weight: bold;
-            color: #666;
-        }
-        
-        .ci-line.upper::after {
-            content: 'U';
-            position: absolute;
-            bottom: -18px;
-            left: -4px;
-            font-size: 10px;
-            font-weight: bold;
-            color: #666;
+            height: 8px;
+            background: rgba(0, 0, 0, 0.3);
+            top: 13.5px;
+            border-radius: 4px;
         }
         
         .score-indicator {
@@ -299,7 +277,7 @@
             top: -8px;
             width: 4px;
             height: 50px;
-            background: #874f80;
+            background: #333;
             border-radius: 2px;
             transition: left 0.5s ease;
             z-index: 2;
@@ -311,7 +289,7 @@
             top: -22px;
             left: 50%;
             transform: translateX(-50%);
-            background: #874f80;
+            background: #333;
             color: white;
             padding: 2px 6px;
             border-radius: 4px;
@@ -387,6 +365,14 @@
         @media (max-width: 768px) {
             .calculator-wrapper {
                 grid-template-columns: 1fr;
+            }
+            .footer-content {
+                flex-direction: column;
+                text-align: center;
+            }
+            .footer-left, .footer-right {
+                text-align: center;
+                margin: 10px 0;
             }
         }
         
@@ -534,8 +520,7 @@
                                 
                                 <div class="score-range-container">
                                     <div class="score-range-bar">
-                                        <div id="unsup-ci-lower" class="ci-line lower"></div>
-                                        <div id="unsup-ci-upper" class="ci-line upper"></div>
+                                        <div id="unsup-ci-bar" class="ci-range-bar"></div>
                                         <div id="unsup-indicator" class="score-indicator" data-score=""></div>
                                         <div class="reference-line"></div>
                                     </div>
@@ -631,8 +616,7 @@
                                 
                                 <div class="score-range-container">
                                     <div class="score-range-bar">
-                                        <div id="sup-ci-lower" class="ci-line lower"></div>
-                                        <div id="sup-ci-upper" class="ci-line upper"></div>
+                                        <div id="sup-ci-bar" class="ci-range-bar"></div>
                                         <div id="sup-indicator" class="score-indicator" data-score=""></div>
                                         <div class="reference-line"></div>
                                     </div>
@@ -772,7 +756,7 @@
             // Generate interpretation
             let interpretation = "";
             if (percentile <= 33) {
-                interpretation = "Higher social risk. Enhanced follow-up and support services recommended.";
+                interpretation = "Higher social risk. Enhanced surveillance and support services recommended.";
             } else if (percentile <= 66) {
                 interpretation = "Moderate social risk. Standard follow-up with attention to social resources.";
             } else {
@@ -780,8 +764,8 @@
             }
             
             // Display results
-            document.getElementById('unsup-score').textContent = score.toFixed(2);
-            document.getElementById('unsup-ci').textContent = `95% CI: [${lowerCI.toFixed(2)}, ${upperCI.toFixed(2)}]`;
+            document.getElementById('unsup-score').textContent = score.toFixed(3);
+            document.getElementById('unsup-ci').textContent = `95% CI: [${lowerCI.toFixed(3)}, ${upperCI.toFixed(3)}]`;
             document.getElementById('unsup-percentile').textContent = percentile.toFixed(0) + 'th percentile';
             document.getElementById('unsup-interpretation').textContent = interpretation;
             
@@ -790,11 +774,9 @@
             indicator.style.left = Math.max(0, Math.min(100, position)) + '%';
             indicator.setAttribute('data-score', score.toFixed(2));
             
-            const ciLower = document.getElementById('unsup-ci-lower');
-            ciLower.style.left = Math.max(0, Math.min(100, ciLowerPos)) + '%';
-            
-            const ciUpper = document.getElementById('unsup-ci-upper');
-            ciUpper.style.left = Math.max(0, Math.min(100, ciUpperPos)) + '%';
+            const ciBar = document.getElementById('unsup-ci-bar');
+            ciBar.style.left = Math.max(0, ciLowerPos) + '%';
+            ciBar.style.width = Math.max(0, (ciUpperPos - ciLowerPos)) + '%';
             
             document.getElementById('unsupervised-results').style.display = 'block';
             document.getElementById('unsupervised-results').scrollIntoView({ behavior: 'smooth' });
