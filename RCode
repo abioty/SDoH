@@ -1,6 +1,5 @@
 #################################################################################
 #  Social-Risk Composite Score Development with Tidymodels
-#  FIXED VERSION: Middle+High Income as Reference Category
 #################################################################################
 
 # 0. Setup and Dependencies ----
