@@ -138,9 +138,12 @@
             border-radius: 5px;
         }
         
-        /* Calculator Styles */
-        .calculator-container {
-            max-width: 600px;
+        /* Calculator Layout */
+        .calculator-layout {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 40px;
+            max-width: 1400px;
             margin: 0 auto;
         }
         
@@ -149,7 +152,6 @@
             padding: 30px;
             border-radius: 15px;
             box-shadow: 0 5px 15px rgba(0,0,0,0.08);
-            margin-bottom: 30px;
         }
         
         .input-section h2 {
@@ -196,7 +198,7 @@
             color: white;
             border: none;
             border-radius: 10px;
-            font-size: 18px;
+            font-size: 16px;
             font-weight: 600;
             cursor: pointer;
             transition: transform 0.2s, box-shadow 0.2s;
@@ -208,9 +210,59 @@
             box-shadow: 0 10px 25px rgba(0,0,0,0.2);
         }
         
+        /* Batch Processing Styles */
+        .csv-format {
+            background: white;
+            padding: 12px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            margin: 15px 0;
+            font-family: monospace;
+            font-size: 0.8em;
+            overflow-x: auto;
+        }
+        
+        .file-upload-btn {
+            display: inline-block;
+            padding: 12px 24px;
+            background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+            color: white;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 600;
+            transition: all 0.2s;
+        }
+        
+        .file-upload-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(0,0,0,0.2);
+        }
+        
+        .file-upload-btn input[type="file"] {
+            display: none;
+        }
+        
+        .download-btn {
+            padding: 12px 24px;
+            background: #28a745;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 600;
+            transition: all 0.2s;
+            margin-top: 15px;
+        }
+        
+        .download-btn:hover {
+            background: #218838;
+            transform: translateY(-2px);
+        }
+        
         /* Results Section */
         .results-wrapper {
             display: none;
+            margin-top: 40px;
             animation: slideIn 0.5s ease-out;
         }
         
@@ -383,7 +435,6 @@
         .footer {
             background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
             padding: 25px 40px;
-            border-top: none;
             margin-top: 50px;
             color: white;
             font-size: 0.9em;
@@ -428,6 +479,12 @@
         
         .print-btn:hover {
             background: #5a6268;
+        }
+        
+        @media (max-width: 1024px) {
+            .calculator-layout {
+                grid-template-columns: 1fr;
+            }
         }
         
         @media (max-width: 768px) {
@@ -508,142 +565,200 @@
             
             <!-- Calculator Tab -->
             <div id="calculator" class="tab-content">
-                <div class="calculator-container">
-                    <div class="info-box">
-                        <strong>Instructions:</strong> Select the appropriate category for each social determinant below. 
-                        Click "Calculate Scores" to generate results for both MCA and Ridge models simultaneously.
-                        Lower scores indicate higher social risk.
-                    </div>
-                    
-                    <div class="input-section">
-                        <h2>Enter Social Determinants</h2>
+                <div class="calculator-layout">
+                    <!-- Left Column: Single Subject Calculator -->
+                    <div>
+                        <div class="info-box">
+                            <strong>Single Subject Calculator:</strong> Enter data for one subject and click "Calculate Scores" 
+                            to generate both MCA and Ridge model results.
+                        </div>
                         
-                        <form id="sdoh-form">
-                            <div class="form-group">
-                                <label>Maternal Age at Delivery</label>
-                                <select name="age" required>
-                                    <option value="">Select...</option>
-                                    <option value="0">Over 25 years (Reference)</option>
-                                    <option value="younger">25 years or younger</option>
-                                </select>
-                            </div>
+                        <div class="input-section">
+                            <h2>Enter Social Determinants</h2>
                             
-                            <div class="form-group">
-                                <label>Maternal Education</label>
-                                <select name="education" required>
-                                    <option value="">Select...</option>
-                                    <option value="0">Graduate degree (Reference)</option>
-                                    <option value="college">College/Some college</option>
-                                    <option value="hs">High school or less</option>
-                                </select>
-                            </div>
-                            
-                            <div class="form-group">
-                                <label>Household Income</label>
-                                <select name="income" required>
-                                    <option value="">Select...</option>
-                                    <option value="0">Middle-High income (>125% FPL) (Reference)</option>
-                                    <option value="low">Low income (≤125% FPL)</option>
-                                </select>
-                            </div>
-                            
-                            <div class="form-group">
-                                <label>Employment Status</label>
-                                <select name="employment" required>
-                                    <option value="">Select...</option>
-                                    <option value="0">Employed (Reference)</option>
-                                    <option value="home">Stay-at-home caregiver</option>
-                                    <option value="unemployed">Unemployed</option>
-                                </select>
-                            </div>
-                            
-                            <div class="form-group">
-                                <label>Family Structure</label>
-                                <select name="family" required>
-                                    <option value="">Select...</option>
-                                    <option value="0">Married (Reference)</option>
-                                    <option value="cohabit">Cohabiting/Living with partner</option>
-                                    <option value="single">Single/Divorced/Separated</option>
-                                </select>
-                            </div>
-                            
-                            <button type="button" class="calculate-btn" onclick="calculateScores()">
-                                Calculate Scores
-                            </button>
-                        </form>
+                            <form id="sdoh-form">
+                                <div class="form-group">
+                                    <label>Maternal Age at Delivery</label>
+                                    <select name="age" required>
+                                        <option value="">Select...</option>
+                                        <option value="0">Over 25 years (Reference)</option>
+                                        <option value="younger">25 years or younger</option>
+                                    </select>
+                                </div>
+                                
+                                <div class="form-group">
+                                    <label>Maternal Education</label>
+                                    <select name="education" required>
+                                        <option value="">Select...</option>
+                                        <option value="0">Graduate degree (Reference)</option>
+                                        <option value="college">College/Some college</option>
+                                        <option value="hs">High school or less</option>
+                                    </select>
+                                </div>
+                                
+                                <div class="form-group">
+                                    <label>Household Income</label>
+                                    <select name="income" required>
+                                        <option value="">Select...</option>
+                                        <option value="0">Middle-High income (>125% FPL) (Reference)</option>
+                                        <option value="low">Low income (≤125% FPL)</option>
+                                    </select>
+                                </div>
+                                
+                                <div class="form-group">
+                                    <label>Employment Status</label>
+                                    <select name="employment" required>
+                                        <option value="">Select...</option>
+                                        <option value="0">Employed (Reference)</option>
+                                        <option value="home">Stay-at-home caregiver</option>
+                                        <option value="unemployed">Unemployed</option>
+                                    </select>
+                                </div>
+                                
+                                <div class="form-group">
+                                    <label>Family Structure</label>
+                                    <select name="family" required>
+                                        <option value="">Select...</option>
+                                        <option value="0">Married (Reference)</option>
+                                        <option value="cohabit">Cohabiting/Living with partner</option>
+                                        <option value="single">Single/Divorced/Separated</option>
+                                    </select>
+                                </div>
+                                
+                                <button type="button" class="calculate-btn" onclick="calculateScores()">
+                                    Calculate Scores
+                                </button>
+                            </form>
+                        </div>
                     </div>
                     
-                    <div id="results-wrapper" class="results-wrapper">
-                        <div class="results-grid">
-                            <!-- MCA Model Results -->
-                            <div class="result-card">
-                                <h3>MCA Model (Unsupervised)</h3>
-                                <div class="score-range-info">
-                                    Range: -2.01 to 0.00
+                    <!-- Right Column: Batch Processing -->
+                    <div>
+                        <div class="info-box">
+                            <strong>Batch Processing (CSV):</strong> Upload a CSV file to calculate scores for multiple subjects 
+                            at once. Perfect for research studies.
+                        </div>
+                        
+                        <div class="input-section">
+                            <h2>Batch Score Calculator</h2>
+                            
+                            <h4 style="color: #1e3c72; margin-bottom: 10px;">CSV Format Requirements:</h4>
+                            <p style="font-size: 0.9em; margin-bottom: 10px;">Your CSV must have these exact column headers:</p>
+                            
+                            <ul style="font-size: 0.85em; margin-left: 20px; margin-bottom: 15px;">
+                                <li><strong>subject_id</strong> - Unique identifier</li>
+                                <li><strong>maternal_age</strong> - Values: "over25" or "25orless"</li>
+                                <li><strong>education</strong> - Values: "graduate", "college", or "highschool"</li>
+                                <li><strong>income</strong> - Values: "middlehigh" or "low"</li>
+                                <li><strong>employment</strong> - Values: "employed", "homecare", or "unemployed"</li>
+                                <li><strong>family</strong> - Values: "married", "cohabiting", or "single"</li>
+                            </ul>
+                            
+                            <div class="csv-format">subject_id,maternal_age,education,income,employment,family
+001,over25,graduate,middlehigh,employed,married
+002,25orless,highschool,low,unemployed,single
+003,over25,college,middlehigh,homecare,cohabiting</div>
+                            
+                            <div style="margin: 20px 0;">
+                                <label class="file-upload-btn">
+                                    📁 Choose CSV File
+                                    <input type="file" id="csv-upload" accept=".csv" onchange="handleFileUpload(event)">
+                                </label>
+                            </div>
+                            
+                            <div id="file-info" style="display: none; margin-bottom: 15px; padding: 10px; background: #e7f3ff; border-radius: 5px;">
+                                <strong>File loaded:</strong> <span id="file-name"></span><br>
+                                <strong>Subjects:</strong> <span id="subject-count"></span>
+                            </div>
+                            
+                            <button type="button" class="calculate-btn" id="batch-calculate" onclick="calculateBatch()" style="display: none;">
+                                Process Batch Scores
+                            </button>
+                            
+                            <div id="batch-results" style="display: none; margin-top: 20px;">
+                                <div style="padding: 15px; background: #d4edda; border-radius: 5px; margin-bottom: 15px;">
+                                    <strong style="color: #155724;">✓ Processing Complete!</strong><br>
+                                    <span id="batch-summary" style="font-size: 0.9em;"></span>
                                 </div>
-                                <div class="score-display" id="mca-score"></div>
-                                <div class="score-ci" id="mca-ci"></div>
-                                
-                                <div class="score-range-container">
-                                    <div class="score-range-bar">
-                                        <div id="mca-ci-lower" class="ci-line lower"></div>
-                                        <div id="mca-ci-upper" class="ci-line upper"></div>
-                                        <div id="mca-indicator" class="score-indicator"></div>
-                                        <div class="reference-line"></div>
-                                    </div>
-                                    <div class="range-labels">
-                                        <span>-2.01</span>
-                                        <span>0</span>
-                                    </div>
+                                <button class="download-btn" onclick="downloadResults()">
+                                    📥 Download Results CSV
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Results for single subject (appears below) -->
+                <div id="results-wrapper" class="results-wrapper">
+                    <div class="results-grid">
+                        <!-- MCA Model Results -->
+                        <div class="result-card">
+                            <h3>MCA Model (Unsupervised)</h3>
+                            <div class="score-range-info">
+                                Range: -2.01 to 0.00
+                            </div>
+                            <div class="score-display" id="mca-score"></div>
+                            <div class="score-ci" id="mca-ci"></div>
+                            
+                            <div class="score-range-container">
+                                <div class="score-range-bar">
+                                    <div id="mca-ci-lower" class="ci-line lower"></div>
+                                    <div id="mca-ci-upper" class="ci-line upper"></div>
+                                    <div id="mca-indicator" class="score-indicator"></div>
+                                    <div class="reference-line"></div>
                                 </div>
-                                
-                                <div class="stat-value">
-                                    <span class="stat-label">Percentile:</span> 
-                                    <span id="mca-percentile"></span>
-                                </div>
-                                
-                                <div class="stat-value">
-                                    <span class="stat-label">Interpretation:</span> 
-                                    <span id="mca-interpretation"></span>
+                                <div class="range-labels">
+                                    <span>-2.01</span>
+                                    <span>0</span>
                                 </div>
                             </div>
                             
-                            <!-- Ridge Model Results -->
-                            <div class="result-card">
-                                <h3>Ridge Model (Supervised)</h3>
-                                <div class="score-range-info">
-                                    Range: -27.85 to 0.00
-                                </div>
-                                <div class="score-display" id="ridge-score"></div>
-                                <div class="score-ci" id="ridge-ci"></div>
-                                
-                                <div class="score-range-container">
-                                    <div class="score-range-bar">
-                                        <div id="ridge-ci-lower" class="ci-line lower"></div>
-                                        <div id="ridge-ci-upper" class="ci-line upper"></div>
-                                        <div id="ridge-indicator" class="score-indicator"></div>
-                                        <div class="reference-line"></div>
-                                    </div>
-                                    <div class="range-labels">
-                                        <span>-27.85</span>
-                                        <span>0</span>
-                                    </div>
-                                </div>
-                                
-                                <div class="stat-value">
-                                    <span class="stat-label">Percentile:</span> 
-                                    <span id="ridge-percentile"></span>
-                                </div>
-                                
-                                <div class="stat-value">
-                                    <span class="stat-label">Interpretation:</span> 
-                                    <span id="ridge-interpretation"></span>
-                                </div>
+                            <div class="stat-value">
+                                <span class="stat-label">Percentile:</span> 
+                                <span id="mca-percentile"></span>
+                            </div>
+                            
+                            <div class="stat-value">
+                                <span class="stat-label">Interpretation:</span> 
+                                <span id="mca-interpretation"></span>
                             </div>
                         </div>
                         
-                        <button class="print-btn" onclick="window.print()">Print Results</button>
+                        <!-- Ridge Model Results -->
+                        <div class="result-card">
+                            <h3>Ridge Model (Supervised)</h3>
+                            <div class="score-range-info">
+                                Range: -27.85 to 0.00
+                            </div>
+                            <div class="score-display" id="ridge-score"></div>
+                            <div class="score-ci" id="ridge-ci"></div>
+                            
+                            <div class="score-range-container">
+                                <div class="score-range-bar">
+                                    <div id="ridge-ci-lower" class="ci-line lower"></div>
+                                    <div id="ridge-ci-upper" class="ci-line upper"></div>
+                                    <div id="ridge-indicator" class="score-indicator"></div>
+                                    <div class="reference-line"></div>
+                                </div>
+                                <div class="range-labels">
+                                    <span>-27.85</span>
+                                    <span>0</span>
+                                </div>
+                            </div>
+                            
+                            <div class="stat-value">
+                                <span class="stat-label">Percentile:</span> 
+                                <span id="ridge-percentile"></span>
+                            </div>
+                            
+                            <div class="stat-value">
+                                <span class="stat-label">Interpretation:</span> 
+                                <span id="ridge-interpretation"></span>
+                            </div>
+                        </div>
                     </div>
+                    
+                    <button class="print-btn" onclick="window.print()">Print Results</button>
                 </div>
             </div>
         </div>
@@ -666,49 +781,53 @@
     <script>
         // Model weights
         const mcaWeights = {
-            'younger': -0.30,
-            'college': -0.18,
-            'hs': -0.30,
-            'low': -0.38,
-            'home': -0.04,
-            'unemployed': -0.33,
-            'cohabit': -0.14,
-            'single': -0.33
+            'younger': -0.301,
+            'college': -0.183,
+            'hs': -0.301,
+            'low': -0.381,
+            'home': -0.043,
+            'unemployed': -0.332,
+            'cohabit': -0.140,
+            'single': -0.329
         };
         
         const ridgeWeights = {
-            'younger': -2.13,
-            'college': -3.06,
-            'hs': -4.75,
-            'low': -6.22,
-            'home': -5.29,
-            'unemployed': -2.07,
-            'cohabit': -2.99,
-            'single': -1.32
+            'younger': -2.137,
+            'college': -3.075,
+            'hs': -4.753,
+            'low': -6.221,
+            'home': -5.287,
+            'unemployed': -2.071,
+            'cohabit': -2.986,
+            'single': -1.317
         };
         
         // CI data
         const mcaCIs = {
-            'younger': { lower: -0.39, upper: -0.29 },
-            'college': { lower: -0.23, upper: -0.14 },
-            'hs': { lower: -0.49, upper: -0.44 },
-            'low': { lower: -0.56, upper: -0.52 },
-            'home': { lower: -0.01, upper: 0.10 },
-            'unemployed': { lower: -0.41, upper: -0.34 },
-            'cohabit': { lower: -0.21, upper: -0.11 },
-            'single': { lower: -0.42, upper: -0.36 }
+            'younger': { lower: -0.392, upper: -0.290 },
+            'college': { lower: -0.229, upper: -0.137 },
+            'hs': { lower: -0.485, upper: -0.437 },
+            'low': { lower: -0.559, upper: -0.515 },
+            'home': { lower: -0.009, upper: 0.101 },
+            'unemployed': { lower: -0.409, upper: -0.337 },
+            'cohabit': { lower: -0.211, upper: -0.114 },
+            'single': { lower: -0.424, upper: -0.363 }
         };
         
         const ridgeCIs = {
-            'younger': { lower: -5.17, upper: 0.62 },
-            'college': { lower: -6.49, upper: 0.44 },
-            'hs': { lower: -7.92, upper: -1.63 },
-            'low': { lower: -8.94, upper: -3.28 },
-            'home': { lower: -8.71, upper: -2.21 },
-            'unemployed': { lower: -5.78, upper: 1.41 },
-            'cohabit': { lower: -6.48, upper: 0.02 },
-            'single': { lower: -4.68, upper: 1.81 }
+            'younger': { lower: -5.166, upper: 0.615 },
+            'college': { lower: -6.490, upper: 0.440 },
+            'hs': { lower: -7.919, upper: -1.633 },
+            'low': { lower: -8.938, upper: -3.283 },
+            'home': { lower: -8.707, upper: -2.206 },
+            'unemployed': { lower: -5.784, upper: 1.413 },
+            'cohabit': { lower: -6.483, upper: 0.020 },
+            'single': { lower: -4.684, upper: 1.806 }
         };
+        
+        // Batch processing variables
+        let csvData = null;
+        let processedResults = null;
         
         // Tab switching
         function showTab(tabName) {
@@ -734,7 +853,7 @@
             return Math.sqrt(sumOfSquares);
         }
         
-        // Main calculation function
+        // Single subject calculation
         function calculateScores() {
             const form = document.getElementById('sdoh-form');
             
@@ -787,33 +906,182 @@
             document.getElementById('ridge-percentile').textContent = ridgePercentile.toFixed(0) + 'th percentile';
             document.getElementById('ridge-interpretation').textContent = ridgeInterpretation;
             
-            // Update MCA visualization
-            const mcaMinScore = -2.01;
-            const mcaMaxScore = 0;
-            const mcaPosition = ((mcaScore - mcaMinScore) / (mcaMaxScore - mcaMinScore)) * 100;
-            const mcaCILowerPos = ((mcaLowerCI - mcaMinScore) / (mcaMaxScore - mcaMinScore)) * 100;
-            const mcaCIUpperPos = ((mcaUpperCI - mcaMinScore) / (mcaMaxScore - mcaMinScore)) * 100;
-            
-            document.getElementById('mca-indicator').style.left = Math.max(0, Math.min(100, mcaPosition)) + '%';
-            document.getElementById('mca-indicator').setAttribute('data-score', mcaScore.toFixed(2));
-            document.getElementById('mca-ci-lower').style.left = Math.max(0, Math.min(100, mcaCILowerPos)) + '%';
-            document.getElementById('mca-ci-upper').style.left = Math.max(0, Math.min(100, mcaCIUpperPos)) + '%';
-            
-            // Update Ridge visualization
-            const ridgeMinScore = -27.85;
-            const ridgeMaxScore = 0;
-            const ridgePosition = ((ridgeScore - ridgeMinScore) / (ridgeMaxScore - ridgeMinScore)) * 100;
-            const ridgeCILowerPos = ((ridgeLowerCI - ridgeMinScore) / (ridgeMaxScore - ridgeMinScore)) * 100;
-            const ridgeCIUpperPos = ((ridgeUpperCI - ridgeMinScore) / (ridgeMaxScore - ridgeMinScore)) * 100;
-            
-            document.getElementById('ridge-indicator').style.left = Math.max(0, Math.min(100, ridgePosition)) + '%';
-            document.getElementById('ridge-indicator').setAttribute('data-score', ridgeScore.toFixed(2));
-            document.getElementById('ridge-ci-lower').style.left = Math.max(0, Math.min(100, ridgeCILowerPos)) + '%';
-            document.getElementById('ridge-ci-upper').style.left = Math.max(0, Math.min(100, ridgeCIUpperPos)) + '%';
+            // Update visualizations
+            updateVisualization('mca', mcaScore, mcaLowerCI, mcaUpperCI, -2.01, 0);
+            updateVisualization('ridge', ridgeScore, ridgeLowerCI, ridgeUpperCI, -27.85, 0);
             
             // Show results
             document.getElementById('results-wrapper').style.display = 'block';
             document.getElementById('results-wrapper').scrollIntoView({ behavior: 'smooth' });
+        }
+        
+        // Update visualization
+        function updateVisualization(model, score, lowerCI, upperCI, minScore, maxScore) {
+            const position = ((score - minScore) / (maxScore - minScore)) * 100;
+            const ciLowerPos = ((lowerCI - minScore) / (maxScore - minScore)) * 100;
+            const ciUpperPos = ((upperCI - minScore) / (maxScore - minScore)) * 100;
+            
+            document.getElementById(`${model}-indicator`).style.left = Math.max(0, Math.min(100, position)) + '%';
+            document.getElementById(`${model}-indicator`).setAttribute('data-score', score.toFixed(2));
+            document.getElementById(`${model}-ci-lower`).style.left = Math.max(0, Math.min(100, ciLowerPos)) + '%';
+            document.getElementById(`${model}-ci-upper`).style.left = Math.max(0, Math.min(100, ciUpperPos)) + '%';
+        }
+        
+        // Batch processing functions
+        function handleFileUpload(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+            
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                const text = e.target.result;
+                parseCSV(text);
+                
+                // Show file info
+                document.getElementById('file-name').textContent = file.name;
+                document.getElementById('file-info').style.display = 'block';
+                document.getElementById('batch-calculate').style.display = 'block';
+                document.getElementById('batch-results').style.display = 'none';
+            };
+            reader.readAsText(file);
+        }
+        
+        function parseCSV(text) {
+            const lines = text.trim().split('\n');
+            const headers = lines[0].toLowerCase().split(',').map(h => h.trim());
+            
+            // Validate headers
+            const requiredHeaders = ['subject_id', 'maternal_age', 'education', 'income', 'employment', 'family'];
+            const missingHeaders = requiredHeaders.filter(h => !headers.includes(h));
+            
+            if (missingHeaders.length > 0) {
+                alert('Missing required columns: ' + missingHeaders.join(', '));
+                return;
+            }
+            
+            // Parse data rows
+            csvData = [];
+            for (let i = 1; i < lines.length; i++) {
+                const values = lines[i].split(',').map(v => v.trim());
+                if (values.length === headers.length) {
+                    const row = {};
+                    headers.forEach((header, index) => {
+                        row[header] = values[index];
+                    });
+                    csvData.push(row);
+                }
+            }
+            
+            document.getElementById('subject-count').textContent = csvData.length;
+        }
+        
+        function calculateBatch() {
+            if (!csvData || csvData.length === 0) {
+                alert('Please upload a valid CSV file first.');
+                return;
+            }
+            
+            processedResults = [];
+            
+            csvData.forEach(subject => {
+                // Map CSV values to calculator values
+                const mappedData = mapCSVToWeights(subject);
+                
+                // Calculate scores
+                let mcaScore = 0;
+                let ridgeScore = 0;
+                const selectedVars = [];
+                
+                // Process each variable
+                Object.keys(mappedData).forEach(key => {
+                    const value = mappedData[key];
+                    if (value && value !== '0') {
+                        selectedVars.push(value);
+                        if (mcaWeights[value]) mcaScore += mcaWeights[value];
+                        if (ridgeWeights[value]) ridgeScore += ridgeWeights[value];
+                    }
+                });
+                
+                // Calculate CIs
+                const mcaCIHalfWidth = calculateCompositeCI(selectedVars, mcaCIs);
+                const ridgeCIHalfWidth = calculateCompositeCI(selectedVars, ridgeCIs);
+                
+                // Calculate percentiles
+                const mcaPercentile = calculateMCAPercentile(mcaScore);
+                const ridgePercentile = calculateRidgePercentile(ridgeScore);
+                
+                // Store results
+                processedResults.push({
+                    subject_id: subject.subject_id,
+                    maternal_age: subject.maternal_age,
+                    education: subject.education,
+                    income: subject.income,
+                    employment: subject.employment,
+                    family: subject.family,
+                    mca_score: mcaScore.toFixed(2),
+                    mca_ci_lower: (mcaScore - mcaCIHalfWidth).toFixed(2),
+                    mca_ci_upper: (mcaScore + mcaCIHalfWidth).toFixed(2),
+                    mca_percentile: mcaPercentile.toFixed(0),
+                    ridge_score: ridgeScore.toFixed(2),
+                    ridge_ci_lower: (ridgeScore - ridgeCIHalfWidth).toFixed(2),
+                    ridge_ci_upper: (ridgeScore + ridgeCIHalfWidth).toFixed(2),
+                    ridge_percentile: ridgePercentile.toFixed(0)
+                });
+            });
+            
+            // Show results summary
+            document.getElementById('batch-summary').textContent = 
+                `Calculated scores for ${processedResults.length} subjects successfully.`;
+            document.getElementById('batch-results').style.display = 'block';
+        }
+        
+        function mapCSVToWeights(subject) {
+            const mapped = {};
+            
+            // Maternal age
+            if (subject.maternal_age === '25orless') mapped.age = 'younger';
+            else if (subject.maternal_age === 'over25') mapped.age = '0';
+            
+            // Education
+            if (subject.education === 'graduate') mapped.education = '0';
+            else if (subject.education === 'college') mapped.education = 'college';
+            else if (subject.education === 'highschool') mapped.education = 'hs';
+            
+            // Income
+            if (subject.income === 'middlehigh') mapped.income = '0';
+            else if (subject.income === 'low') mapped.income = 'low';
+            
+            // Employment
+            if (subject.employment === 'employed') mapped.employment = '0';
+            else if (subject.employment === 'homecare') mapped.employment = 'home';
+            else if (subject.employment === 'unemployed') mapped.employment = 'unemployed';
+            
+            // Family
+            if (subject.family === 'married') mapped.family = '0';
+            else if (subject.family === 'cohabiting') mapped.family = 'cohabit';
+            else if (subject.family === 'single') mapped.family = 'single';
+            
+            return mapped;
+        }
+        
+        function downloadResults() {
+            if (!processedResults || processedResults.length === 0) return;
+            
+            // Create CSV content
+            const headers = Object.keys(processedResults[0]).join(',');
+            const rows = processedResults.map(row => Object.values(row).join(','));
+            const csvContent = headers + '\n' + rows.join('\n');
+            
+            // Create download link
+            const blob = new Blob([csvContent], { type: 'text/csv' });
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'sdoh_scores_results.csv';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            window.URL.revokeObjectURL(url);
         }
         
         // Percentile calculations
@@ -835,7 +1103,7 @@
             return 85;
         }
         
-        // Get interpretation based on percentile
+        // Get interpretation
         function getInterpretation(percentile) {
             if (percentile <= 33) {
                 return "Higher social risk. Enhanced follow-up and support services recommended.";
