@@ -31,6 +31,7 @@
             padding: 25px;
             text-align: center;
             box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+            position: relative;
         }
         
         .header h1 {
@@ -41,6 +42,21 @@
         .header p {
             font-size: 1em;
             opacity: 0.95;
+        }
+        
+        .visitor-counter {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            background: rgba(255, 255, 255, 0.2);
+            padding: 8px 15px;
+            border-radius: 20px;
+            font-size: 0.9em;
+            backdrop-filter: blur(10px);
+        }
+        
+        .visitor-counter span {
+            font-weight: bold;
         }
         
         .nav-tabs {
@@ -514,6 +530,9 @@
 <body>
     <div class="container">
         <div class="header">
+            <div class="visitor-counter">
+                Visitors: <span id="visitor-count">0</span>
+            </div>
             <h1>Perinatal SDoH Composite Score Calculator</h1>
             <p>Social Determinants of Health Assessment for Preterm Infants (≤32 weeks GA)</p>
         </div>
@@ -569,8 +588,8 @@
                     <!-- Left Column: Single Subject Calculator -->
                     <div>
                         <div class="info-box">
-                            <strong>Single Subject Calculator:</strong> Select the appropriate catagory for each social determinant below. Click "Calculate Scores" 
-                            to generate both MCA and Ridge model simultaneously. Lower scores indicate higher social risk.
+                            <strong>Single Subject Calculator:</strong> Enter data for one subject and click "Calculate Scores" 
+                            to generate both MCA and Ridge model results.
                         </div>
                         
                         <div class="input-section">
@@ -636,7 +655,7 @@
                     <div>
                         <div class="info-box">
                             <strong>Batch Processing (CSV):</strong> Upload a CSV file to calculate scores for multiple subjects 
-                            at once. You will be able to download the SDoH score in a csv format. Good for research studies. Lower scores indicate higher social risk. 
+                            at once. Perfect for research studies.
                         </div>
                         
                         <div class="input-section">
@@ -681,7 +700,7 @@
                                     <span id="batch-summary" style="font-size: 0.9em;"></span>
                                 </div>
                                 <button class="download-btn" onclick="downloadResults()">
-                                     Download Results CSV
+                                    📥 Download Results CSV
                                 </button>
                             </div>
                         </div>
@@ -779,6 +798,20 @@
     </div>
     
     <script>
+        // Initialize visitor counter - Real global counter using CountAPI
+        window.addEventListener('DOMContentLoaded', function() {
+            // This counts ALL visitors to your site globally
+            fetch('https://api.countapi.xyz/hit/abioty.github.io-sdoh/visits')
+                .then(res => res.json())
+                .then(res => {
+                    document.getElementById('visitor-count').textContent = res.value.toLocaleString();
+                })
+                .catch(err => {
+                    // Fallback if the API is unavailable
+                    document.getElementById('visitor-count').textContent = 'N/A';
+                });
+        });
+        
         // Model weights
         const mcaWeights = {
             'younger': -0.301,
