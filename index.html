@@ -1,1157 +1,845 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Perinatal SDoH Composite Score Calculator</title>
-    <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-        
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
-            background: #f5f5f5;
-            min-height: 100vh;
-        }
-        
-        .container {
-            max-width: 1400px;
-            margin: 0 auto;
-            background: white;
-            min-height: 100vh;
-            box-shadow: 0 0 20px rgba(0,0,0,0.1);
-        }
-        
-        .header {
-            background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
-            color: white;
-            padding: 25px;
-            text-align: center;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.2);
-            position: relative;
-        }
-        
-        .header h1 {
-            font-size: 2em;
-            margin-bottom: 8px;
-        }
-        
-        .header p {
-            font-size: 1em;
-            opacity: 0.95;
-        }
-        
-        .visitor-counter {
-            position: absolute;
-            top: 20px;
-            right: 20px;
-            background: rgba(255, 255, 255, 0.2);
-            padding: 8px 15px;
-            border-radius: 20px;
-            font-size: 0.9em;
-            backdrop-filter: blur(10px);
-        }
-        
-        .visitor-counter span {
-            font-weight: bold;
-        }
-        
-        .nav-tabs {
-            background: #f8f9fa;
-            border-bottom: 3px solid #1e3c72;
-            display: flex;
-            padding: 0 30px;
-        }
-        
-        .nav-tab {
-            padding: 15px 30px;
-            background: transparent;
-            border: none;
-            font-size: 16px;
-            font-weight: 600;
-            color: #333;
-            cursor: pointer;
-            transition: all 0.3s;
-            border-bottom: 3px solid transparent;
-            margin-bottom: -3px;
-        }
-        
-        .nav-tab:hover {
-            background: #e9ecef;
-        }
-        
-        .nav-tab.active {
-            background: white;
-            border-bottom: 3px solid #1e3c72;
-            color: #1e3c72;
-        }
-        
-        .content-area {
-            padding: 40px;
-        }
-        
-        .tab-content {
-            display: none;
-        }
-        
-        .tab-content.active {
-            display: block;
-        }
-        
-        /* Overview Section Styles */
-        .overview-section {
-            margin-bottom: 30px;
-            max-width: 900px;
-        }
-        
-        .overview-section h2 {
-            color: #1e3c72;
-            margin-bottom: 15px;
-            padding-bottom: 10px;
-            border-bottom: 2px solid #e9ecef;
-            font-size: 1.5em;
-        }
-        
-        .overview-section h3 {
-            color: #2a5298;
-            margin: 20px 0 10px 0;
-            font-size: 1.2em;
-        }
-        
-        .overview-section p {
-            line-height: 1.6;
-            color: #495057;
-            margin-bottom: 15px;
-        }
-        
-        .overview-section ul {
-            margin-left: 25px;
-            margin-bottom: 15px;
-        }
-        
-        .overview-section li {
-            margin-bottom: 8px;
-            color: #495057;
-            line-height: 1.6;
-        }
-        
-        .info-box {
-            background: #e7f3ff;
-            border-left: 4px solid #1e3c72;
-            padding: 15px;
-            margin: 20px 0;
-            border-radius: 5px;
-        }
-        
-        .warning-box {
-            background: #fff3cd;
-            border-left: 4px solid #ffc107;
-            padding: 15px;
-            margin: 20px 0;
-            border-radius: 5px;
-        }
-        
-        /* Calculator Layout */
-        .calculator-layout {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 40px;
-            max-width: 1400px;
-            margin: 0 auto;
-        }
-        
-        .input-section {
-            background: #f8f9fa;
-            padding: 30px;
-            border-radius: 15px;
-            box-shadow: 0 5px 15px rgba(0,0,0,0.08);
-        }
-        
-        .input-section h2 {
-            color: #1e3c72;
-            margin-bottom: 20px;
-            padding-bottom: 10px;
-            border-bottom: 3px solid #1e3c72;
-            font-size: 1.4em;
-            text-align: center;
-        }
-        
-        .form-group {
-            margin-bottom: 20px;
-        }
-        
-        .form-group label {
-            display: block;
-            font-weight: 600;
-            color: #555;
-            margin-bottom: 6px;
-            font-size: 0.95em;
-        }
-        
-        .form-group select {
-            width: 100%;
-            padding: 10px;
-            border: 2px solid #ddd;
-            border-radius: 8px;
-            font-size: 14px;
-            transition: all 0.3s;
-            background: white;
-        }
-        
-        .form-group select:focus {
-            outline: none;
-            border-color: #1e3c72;
-            box-shadow: 0 0 0 3px rgba(30, 60, 114, 0.1);
-        }
-        
-        .calculate-btn {
-            width: 100%;
-            padding: 15px;
-            background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
-            color: white;
-            border: none;
-            border-radius: 10px;
-            font-size: 16px;
-            font-weight: 600;
-            cursor: pointer;
-            transition: transform 0.2s, box-shadow 0.2s;
-            margin-top: 20px;
-        }
-        
-        .calculate-btn:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 10px 25px rgba(0,0,0,0.2);
-        }
-        
-        /* Batch Processing Styles */
-        .csv-format {
-            background: white;
-            padding: 12px;
-            border: 1px solid #ddd;
-            border-radius: 5px;
-            margin: 15px 0;
-            font-family: monospace;
-            font-size: 0.8em;
-            overflow-x: auto;
-        }
-        
-        .file-upload-btn {
-            display: inline-block;
-            padding: 12px 24px;
-            background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
-            color: white;
-            border-radius: 8px;
-            cursor: pointer;
-            font-weight: 600;
-            transition: all 0.2s;
-        }
-        
-        .file-upload-btn:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 5px 15px rgba(0,0,0,0.2);
-        }
-        
-        .file-upload-btn input[type="file"] {
-            display: none;
-        }
-        
-        .download-btn {
-            padding: 12px 24px;
-            background: #28a745;
-            color: white;
-            border: none;
-            border-radius: 8px;
-            cursor: pointer;
-            font-weight: 600;
-            transition: all 0.2s;
-            margin-top: 15px;
-        }
-        
-        .download-btn:hover {
-            background: #218838;
-            transform: translateY(-2px);
-        }
-        
-        /* Results Section */
-        .results-wrapper {
-            display: none;
-            margin-top: 40px;
-            animation: slideIn 0.5s ease-out;
-        }
-        
-        @keyframes slideIn {
-            from {
-                opacity: 0;
-                transform: translateY(20px);
-            }
-            to {
-                opacity: 1;
-                transform: translateY(0);
-            }
-        }
-        
-        .results-grid {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 30px;
-            margin-bottom: 30px;
-        }
-        
-        .result-card {
-            background: white;
-            padding: 25px;
-            border-radius: 12px;
-            box-shadow: 0 5px 15px rgba(0,0,0,0.1);
-            border: 2px solid #e9ecef;
-        }
-        
-        .result-card h3 {
-            color: #1e3c72;
-            margin-bottom: 15px;
-            font-size: 1.2em;
-            text-align: center;
-        }
-        
-        .score-display {
-            font-size: 2.5em;
-            font-weight: bold;
-            margin: 15px 0;
-            text-align: center;
-            color: #1e3c72;
-        }
-        
-        .score-ci {
-            font-size: 0.9em;
-            color: #666;
-            margin-top: 5px;
-            text-align: center;
-        }
-        
-        .score-range-info {
-            background: #f8f9fa;
-            padding: 8px;
-            border-radius: 5px;
-            margin-bottom: 15px;
-            font-size: 0.85em;
-            color: #666;
-            text-align: center;
-        }
-        
-        .score-range-container {
-            position: relative;
-            margin: 20px 0;
-        }
-        
-        .score-range-bar {
-            position: relative;
-            height: 35px;
-            background: linear-gradient(to right, #dc3545 0%, #ffc107 50%, #28a745 100%);
-            border-radius: 20px;
-            box-shadow: inset 0 2px 4px rgba(0,0,0,0.1);
-        }
-        
-        .ci-line {
-            position: absolute;
-            top: 0;
-            width: 2px;
-            height: 35px;
-            background: #1887ab;
-            opacity: 0.8;
-            transition: left 0.5s ease;
-        }
-        
-        .ci-line.lower::after {
-            content: 'L';
-            position: absolute;
-            bottom: -18px;
-            left: -4px;
-            font-size: 10px;
-            font-weight: bold;
-            color: #666;
-        }
-        
-        .ci-line.upper::after {
-            content: 'U';
-            position: absolute;
-            bottom: -18px;
-            left: -4px;
-            font-size: 10px;
-            font-weight: bold;
-            color: #666;
-        }
-        
-        .score-indicator {
-            position: absolute;
-            top: -8px;
-            width: 4px;
-            height: 50px;
-            background: #874f80;
-            border-radius: 2px;
-            transition: left 0.5s ease;
-            z-index: 2;
-        }
-        
-        .score-indicator::before {
-            content: attr(data-score);
-            position: absolute;
-            top: -22px;
-            left: 50%;
-            transform: translateX(-50%);
-            background: #874f80;
-            color: white;
-            padding: 2px 6px;
-            border-radius: 4px;
-            font-size: 11px;
-            white-space: nowrap;
-        }
-        
-        .reference-line {
-            position: absolute;
-            width: 2px;
-            height: 35px;
-            background: rgba(0, 0, 0, 0.5);
-            top: 0;
-            right: 0;
-        }
-        
-        .reference-line::after {
-            content: 'Ref (0)';
-            position: absolute;
-            top: -20px;
-            right: -15px;
-            font-size: 11px;
-            color: #666;
-        }
-        
-        .range-labels {
-            display: flex;
-            justify-content: space-between;
-            margin-top: 8px;
-            font-size: 12px;
-            color: #666;
-        }
-        
-        .stat-value {
-            font-size: 0.95em;
-            color: #495057;
-            margin: 12px 0;
-            padding: 8px;
-            background: #f8f9fa;
-            border-radius: 5px;
-        }
-        
-        .stat-label {
-            font-weight: 600;
-            color: #6c757d;
-        }
-        
-        .footer {
-            background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
-            padding: 25px 40px;
-            margin-top: 50px;
-            color: white;
-            font-size: 0.9em;
-        }
-        
-        .footer-content {
-            max-width: 1400px;
-            margin: 0 auto;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
-        
-        .footer-left {
-            text-align: left;
-        }
-        
-        .footer-right {
-            text-align: right;
-        }
-        
-        .footer p {
-            margin: 3px 0;
-            opacity: 0.95;
-        }
-        
-        .footer strong {
-            color: white;
-        }
-        
-        .print-btn {
-            background: #6c757d;
-            color: white;
-            padding: 8px 16px;
-            border: none;
-            border-radius: 6px;
-            cursor: pointer;
-            margin: 20px auto;
-            display: block;
-            font-size: 14px;
-        }
-        
-        .print-btn:hover {
-            background: #5a6268;
-        }
-        
-        @media (max-width: 1024px) {
-            .calculator-layout {
-                grid-template-columns: 1fr;
-            }
-        }
-        
-        @media (max-width: 768px) {
-            .results-grid {
-                grid-template-columns: 1fr;
-            }
-            .footer-content {
-                flex-direction: column;
-                text-align: center;
-            }
-            .footer-left, .footer-right {
-                text-align: center;
-                margin: 10px 0;
-            }
-        }
-        
-        @media print {
-            body {
-                background: white;
-            }
-            .print-btn, .nav-tabs {
-                display: none;
-            }
-        }
-    </style>
+  <meta charset="UTF-8" />
+  <meta
+    name="viewport"
+    content="width=device-width, initial-scale=1.0"
+  />
+  <title>Perinatal SDoH Composite Score Calculator</title>
+  <meta name="color-scheme" content="light only" />
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+      background: #f5f5f5;
+      min-height: 100vh;
+    }
+
+    .container {
+      max-width: 1400px;
+      margin: 0 auto;
+      background: #fff;
+      min-height: 100vh;
+      box-shadow: 0 0 20px rgba(0,0,0,0.1);
+    }
+
+    .header {
+      background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+      color: #fff;
+      padding: 25px;
+      text-align: center;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+      position: relative;
+    }
+
+    .header h1 { font-size: 2em; margin-bottom: 8px; }
+    .header p { font-size: 1em; opacity: 0.95; }
+
+    .visitor-counter {
+      position: absolute;
+      top: 20px;
+      right: 20px;
+      background: rgba(255, 255, 255, 0.18);
+      padding: 8px 12px;
+      border-radius: 14px;
+      font-size: 0.85em;
+      backdrop-filter: blur(10px);
+      line-height: 1.25;
+      text-align: left;
+    }
+    .visitor-counter .row { display: flex; gap: 6px; justify-content: space-between; }
+    .visitor-counter strong { font-weight: 700; }
+    .visitor-counter .value { min-width: 3ch; text-align: right; }
+    .visitor-counter [aria-live] { display: inline-block; min-width: 3ch; }
+
+    .nav-tabs {
+      background: #f8f9fa;
+      border-bottom: 3px solid #1e3c72;
+      display: flex;
+      padding: 0 30px;
+    }
+
+    .nav-tab {
+      padding: 15px 30px;
+      background: transparent;
+      border: none;
+      font-size: 16px;
+      font-weight: 600;
+      color: #333;
+      cursor: pointer;
+      transition: all 0.3s;
+      border-bottom: 3px solid transparent;
+      margin-bottom: -3px;
+    }
+    .nav-tab:hover { background: #e9ecef; }
+    .nav-tab.active {
+      background: #fff;
+      border-bottom: 3px solid #1e3c72;
+      color: #1e3c72;
+    }
+
+    .content-area { padding: 40px; }
+
+    .tab-content { display: none; }
+    .tab-content.active { display: block; }
+
+    /* Overview */
+    .overview-section { margin-bottom: 30px; max-width: 900px; }
+    .overview-section h2 {
+      color: #1e3c72; margin-bottom: 15px; padding-bottom: 10px;
+      border-bottom: 2px solid #e9ecef; font-size: 1.5em;
+    }
+    .overview-section h3 { color: #2a5298; margin: 20px 0 10px; font-size: 1.2em; }
+    .overview-section p { line-height: 1.6; color: #495057; margin-bottom: 15px; }
+    .overview-section ul { margin-left: 25px; margin-bottom: 15px; }
+    .overview-section li { margin-bottom: 8px; color: #495057; line-height: 1.6; }
+
+    .info-box {
+      background: #e7f3ff; border-left: 4px solid #1e3c72;
+      padding: 15px; margin: 20px 0; border-radius: 5px;
+    }
+    .warning-box {
+      background: #fff3cd; border-left: 4px solid #ffc107;
+      padding: 15px; margin: 20px 0; border-radius: 5px;
+    }
+
+    /* Calculator layout */
+    .calculator-layout {
+      display: grid; grid-template-columns: 1fr 1fr; gap: 40px;
+      max-width: 1400px; margin: 0 auto;
+    }
+
+    .input-section {
+      background: #f8f9fa; padding: 30px; border-radius: 15px;
+      box-shadow: 0 5px 15px rgba(0,0,0,0.08);
+    }
+    .input-section h2 {
+      color: #1e3c72; margin-bottom: 20px; padding-bottom: 10px;
+      border-bottom: 3px solid #1e3c72; font-size: 1.4em; text-align: center;
+    }
+
+    .form-group { margin-bottom: 20px; }
+    .form-group label {
+      display: block; font-weight: 600; color: #555; margin-bottom: 6px; font-size: 0.95em;
+    }
+    .form-group select {
+      width: 100%; padding: 10px; border: 2px solid #ddd; border-radius: 8px;
+      font-size: 14px; transition: all 0.3s; background: #fff;
+    }
+    .form-group select:focus {
+      outline: none; border-color: #1e3c72; box-shadow: 0 0 0 3px rgba(30,60,114,0.1);
+    }
+
+    .calculate-btn {
+      width: 100%; padding: 15px;
+      background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+      color: #fff; border: none; border-radius: 10px;
+      font-size: 16px; font-weight: 600; cursor: pointer;
+      transition: transform 0.2s, box-shadow 0.2s; margin-top: 20px;
+    }
+    .calculate-btn:hover { transform: translateY(-2px); box-shadow: 0 10px 25px rgba(0,0,0,0.2); }
+
+    .csv-format {
+      background: #fff; padding: 12px; border: 1px solid #ddd; border-radius: 5px;
+      margin: 15px 0; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.8em; overflow-x: auto;
+    }
+
+    .file-upload-btn {
+      display: inline-block; padding: 12px 24px;
+      background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+      color: #fff; border-radius: 8px; cursor: pointer; font-weight: 600; transition: all 0.2s;
+    }
+    .file-upload-btn:hover { transform: translateY(-2px); box-shadow: 0 5px 15px rgba(0,0,0,0.2); }
+    .file-upload-btn input[type="file"] { display: none; }
+
+    .download-btn {
+      padding: 12px 24px; background: #28a745; color: #fff; border: none;
+      border-radius: 8px; cursor: pointer; font-weight: 600; transition: all 0.2s; margin-top: 15px;
+    }
+    .download-btn:hover { background: #218838; transform: translateY(-2px); }
+
+    .results-wrapper { display: none; margin-top: 40px; animation: slideIn 0.5s ease-out; }
+    @keyframes slideIn { from {opacity:0; transform: translateY(20px);} to {opacity:1; transform: translateY(0);} }
+
+    .results-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 30px; margin-bottom: 30px; }
+
+    .result-card {
+      background: #fff; padding: 25px; border-radius: 12px;
+      box-shadow: 0 5px 15px rgba(0,0,0,0.1); border: 2px solid #e9ecef;
+    }
+    .result-card h3 { color: #1e3c72; margin-bottom: 15px; font-size: 1.2em; text-align: center; }
+
+    .score-display { font-size: 2.5em; font-weight: bold; margin: 15px 0; text-align: center; color: #1e3c72; }
+    .score-ci { font-size: 0.9em; color: #666; margin-top: 5px; text-align: center; }
+    .score-range-info {
+      background: #f8f9fa; padding: 8px; border-radius: 5px; margin-bottom: 15px; font-size: 0.85em; color: #666; text-align: center;
+    }
+
+    .score-range-container { position: relative; margin: 20px 0; }
+    .score-range-bar {
+      position: relative; height: 35px;
+      background: linear-gradient(to right, #dc3545 0%, #ffc107 50%, #28a745 100%);
+      border-radius: 20px; box-shadow: inset 0 2px 4px rgba(0,0,0,0.1);
+    }
+    .ci-line {
+      position: absolute; top: 0; width: 2px; height: 35px; background: #1887ab; opacity: 0.8; transition: left 0.5s ease;
+    }
+    .ci-line.lower::after, .ci-line.upper::after {
+      position: absolute; bottom: -18px; left: -4px; font-size: 10px; font-weight: bold; color: #666;
+    }
+    .ci-line.lower::after { content: 'L'; }
+    .ci-line.upper::after { content: 'U'; }
+
+    .score-indicator {
+      position: absolute; top: -8px; width: 4px; height: 50px; background: #874f80; border-radius: 2px; transition: left 0.5s ease; z-index: 2;
+    }
+    .score-indicator::before {
+      content: attr(data-score); position: absolute; top: -22px; left: 50%;
+      transform: translateX(-50%); background: #874f80; color: #fff; padding: 2px 6px; border-radius: 4px; font-size: 11px; white-space: nowrap;
+    }
+
+    .reference-line { position: absolute; width: 2px; height: 35px; background: rgba(0,0,0,0.5); top: 0; right: 0; }
+    .reference-line::after { content: 'Ref (0)'; position: absolute; top: -20px; right: -15px; font-size: 11px; color: #666; }
+
+    .range-labels { display: flex; justify-content: space-between; margin-top: 8px; font-size: 12px; color: #666; }
+
+    .stat-value { font-size: 0.95em; color: #495057; margin: 12px 0; padding: 8px; background: #f8f9fa; border-radius: 5px; }
+    .stat-label { font-weight: 600; color: #6c757d; }
+
+    .print-btn {
+      background: #6c757d; color: #fff; padding: 8px 16px; border: none; border-radius: 6px; cursor: pointer;
+      margin: 20px auto; display: block; font-size: 14px;
+    }
+    .print-btn:hover { background: #5a6268; }
+
+    .footer {
+      background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+      padding: 25px 40px; margin-top: 50px; color: #fff; font-size: 0.9em;
+    }
+    .footer-content {
+      max-width: 1400px; margin: 0 auto; display: flex; justify-content: space-between; align-items: center;
+    }
+    .footer-left { text-align: left; }
+    .footer-right { text-align: right; }
+    .footer p { margin: 3px 0; opacity: 0.95; }
+    .footer strong { color: #fff; }
+
+    @media (max-width: 1024px) { .calculator-layout { grid-template-columns: 1fr; } }
+    @media (max-width: 768px) {
+      .results-grid { grid-template-columns: 1fr; }
+      .footer-content { flex-direction: column; text-align: center; }
+      .footer-left, .footer-right { text-align: center; margin: 10px 0; }
+    }
+    @media print {
+      body { background: #fff; }
+      .print-btn, .nav-tabs, .visitor-counter { display: none !important; }
+      .container { box-shadow: none; }
+    }
+  </style>
 </head>
 <body>
-    <div class="container">
-        <div class="header">
-            <div class="visitor-counter">
-                Visitors: <span id="visitor-count">0</span>
+  <div class="container">
+    <header class="header">
+      <div class="visitor-counter" aria-label="Visitor counters">
+        <div class="row">
+          <span><strong>Global</strong>:</span>
+          <span id="visitor-count-global" class="value" aria-live="polite">—</span>
+        </div>
+        <div class="row">
+          <span><strong>Device</strong>:</span>
+          <span id="visitor-count-device" class="value" aria-live="polite">0</span>
+        </div>
+        <div class="row">
+          <span><strong>Session</strong>:</span>
+          <span id="visitor-count-session" class="value" aria-live="polite">0</span>
+        </div>
+      </div>
+      <h1>Perinatal SDoH Composite Score Calculator</h1>
+      <p>Social Determinants of Health Assessment for Preterm Infants (≤32 weeks GA)</p>
+    </header>
+
+    <nav class="nav-tabs" role="tablist" aria-label="Primary">
+      <button class="nav-tab active" role="tab" aria-selected="true" aria-controls="overview" onclick="showTab('overview', this)">Overview</button>
+      <button class="nav-tab" role="tab" aria-selected="false" aria-controls="calculator" onclick="showTab('calculator', this)">Calculator</button>
+    </nav>
+
+    <main class="content-area">
+      <!-- Overview -->
+      <section id="overview" class="tab-content active" role="tabpanel" aria-labelledby="Overview">
+        <div class="overview-section">
+          <h2>About This Tool</h2>
+          <p>
+            This calculator provides two data-driven composite scores for quantifying social risk in preterm infants
+            born at ≤32 weeks gestational age. The scores integrate five social determinants: maternal age, education,
+            household income (binary), employment status, and family structure.
+          </p>
+
+          <h3>Available Models</h3>
+          <ul>
+            <li><strong>MCA Model (Unsupervised):</strong> Multiple Correspondence Analysis of SDoH patterns independent of outcomes.</li>
+            <li><strong>Ridge Model (Supervised):</strong> Ridge regression optimized for cognitive outcomes at 2 years corrected age.</li>
+          </ul>
+
+          <h3>When to Use</h3>
+          <ul>
+            <li>Initial assessment at NICU discharge or follow-up visits</li>
+            <li>Research studies examining social determinants</li>
+            <li>Risk stratification for developmental follow-up</li>
+            <li>Resource allocation planning</li>
+          </ul>
+
+          <div class="warning-box">
+            <strong>Important Notes:</strong>
+            <ul style="margin-left:20px;margin-top:10px;">
+              <li>Scores quantify social risk but do not predict individual outcomes</li>
+              <li>External validation required for populations outside the development cohort</li>
+              <li>Interpret results within a comprehensive clinical context</li>
+              <li>Confidence intervals represent uncertainty in the learnt weights</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <!-- Calculator -->
+      <section id="calculator" class="tab-content" role="tabpanel" aria-labelledby="Calculator">
+        <div class="calculator-layout">
+          <!-- Left column: Single subject -->
+          <div>
+            <div class="info-box">
+              <strong>Single Subject Calculator:</strong> Enter data for one subject and click “Calculate Scores” to generate both MCA and Ridge results.
             </div>
-            <h1>Perinatal SDoH Composite Score Calculator</h1>
-            <p>Social Determinants of Health Assessment for Preterm Infants (≤32 weeks GA)</p>
-        </div>
-        
-        <div class="nav-tabs">
-            <button class="nav-tab active" onclick="showTab('overview')">Overview</button>
-            <button class="nav-tab" onclick="showTab('calculator')">Calculator</button>
-        </div>
-        
-        <div class="content-area">
-            <!-- Overview Tab -->
-            <div id="overview" class="tab-content active">
-                <div class="overview-section">
-                    <h2>About This Tool</h2>
-                    <p>
-                        This calculator provides two data-driven composite scores for quantifying social risk in preterm infants 
-                        born at ≤32 weeks gestational age. The scores integrate five social determinants: maternal age, education, 
-                        household income (binary), employment status, and family structure.
-                    </p>
-                    
-                    <h3>Available Models</h3>
-                    <ul>
-                        <li><strong>MCA Model (Unsupervised):</strong> Developed using Multiple Correspondence Analysis to identify 
-                        natural patterns in social risk factors without reference to specific outcomes.</li>
-                        <li><strong>Ridge Model (Supervised):</strong> Developed using ridge regression optimized for cognitive 
-                        outcomes at 2 years corrected age.</li>
-                    </ul>
-                    
-                    <h3>When to Use</h3>
-                    <ul>
-                        <li>Initial assessment at NICU discharge or follow-up visits</li>
-                        <li>Research studies examining social determinants</li>
-                        <li>Risk stratification for developmental follow-up</li>
-                        <li>Resource allocation planning</li>
-                    </ul>
-                    
-                    <div class="warning-box">
-                        <strong>Important Notes:</strong>
-                        <ul style="margin-left: 20px; margin-top: 10px;">
-                            <li>Scores quantify social risk but do not predict individual outcomes</li>
-                            <li>External validation required for populations outside the development cohort</li>
-                            <li>Results should be interpreted within comprehensive clinical assessment</li>
-                            <li>Confidence intervals represent statistical uncertainty in the weights</li>
-                            <li>For detailed methodology, refer to the published manuscript</li>
-                        </ul>
-                    </div>
+
+            <div class="input-section">
+              <h2>Enter Social Determinants</h2>
+              <form id="sdoh-form">
+                <div class="form-group">
+                  <label for="age">Maternal Age at Delivery</label>
+                  <select id="age" name="age" required>
+                    <option value="">Select...</option>
+                    <option value="0">Over 25 years (Reference)</option>
+                    <option value="younger">25 years or younger</option>
+                  </select>
                 </div>
+
+                <div class="form-group">
+                  <label for="education">Maternal Education</label>
+                  <select id="education" name="education" required>
+                    <option value="">Select...</option>
+                    <option value="0">Graduate degree (Reference)</option>
+                    <option value="college">College/Some college</option>
+                    <option value="hs">High school or less</option>
+                  </select>
+                </div>
+
+                <div class="form-group">
+                  <label for="income">Household Income</label>
+                  <select id="income" name="income" required>
+                    <option value="">Select...</option>
+                    <option value="0">Middle-High income (>125% FPL) (Reference)</option>
+                    <option value="low">Low income (≤125% FPL)</option>
+                  </select>
+                </div>
+
+                <div class="form-group">
+                  <label for="employment">Employment Status</label>
+                  <select id="employment" name="employment" required>
+                    <option value="">Select...</option>
+                    <option value="0">Employed (Reference)</option>
+                    <option value="home">Stay-at-home caregiver</option>
+                    <option value="unemployed">Unemployed</option>
+                  </select>
+                </div>
+
+                <div class="form-group">
+                  <label for="family">Family Structure</label>
+                  <select id="family" name="family" required>
+                    <option value="">Select...</option>
+                    <option value="0">Married (Reference)</option>
+                    <option value="cohabit">Cohabiting/Living with partner</option>
+                    <option value="single">Single/Divorced/Separated</option>
+                  </select>
+                </div>
+
+                <button type="button" class="calculate-btn" onclick="calculateScores()">Calculate Scores</button>
+              </form>
             </div>
-            
-            <!-- Calculator Tab -->
-            <div id="calculator" class="tab-content">
-                <div class="calculator-layout">
-                    <!-- Left Column: Single Subject Calculator -->
-                    <div>
-                        <div class="info-box">
-                            <strong>Single Subject Calculator:</strong> Enter data for one subject and click "Calculate Scores" 
-                            to generate both MCA and Ridge model results.
-                        </div>
-                        
-                        <div class="input-section">
-                            <h2>Enter Social Determinants</h2>
-                            
-                            <form id="sdoh-form">
-                                <div class="form-group">
-                                    <label>Maternal Age at Delivery</label>
-                                    <select name="age" required>
-                                        <option value="">Select...</option>
-                                        <option value="0">Over 25 years (Reference)</option>
-                                        <option value="younger">25 years or younger</option>
-                                    </select>
-                                </div>
-                                
-                                <div class="form-group">
-                                    <label>Maternal Education</label>
-                                    <select name="education" required>
-                                        <option value="">Select...</option>
-                                        <option value="0">Graduate degree (Reference)</option>
-                                        <option value="college">College/Some college</option>
-                                        <option value="hs">High school or less</option>
-                                    </select>
-                                </div>
-                                
-                                <div class="form-group">
-                                    <label>Household Income</label>
-                                    <select name="income" required>
-                                        <option value="">Select...</option>
-                                        <option value="0">Middle-High income (>125% FPL) (Reference)</option>
-                                        <option value="low">Low income (≤125% FPL)</option>
-                                    </select>
-                                </div>
-                                
-                                <div class="form-group">
-                                    <label>Employment Status</label>
-                                    <select name="employment" required>
-                                        <option value="">Select...</option>
-                                        <option value="0">Employed (Reference)</option>
-                                        <option value="home">Stay-at-home caregiver</option>
-                                        <option value="unemployed">Unemployed</option>
-                                    </select>
-                                </div>
-                                
-                                <div class="form-group">
-                                    <label>Family Structure</label>
-                                    <select name="family" required>
-                                        <option value="">Select...</option>
-                                        <option value="0">Married (Reference)</option>
-                                        <option value="cohabit">Cohabiting/Living with partner</option>
-                                        <option value="single">Single/Divorced/Separated</option>
-                                    </select>
-                                </div>
-                                
-                                <button type="button" class="calculate-btn" onclick="calculateScores()">
-                                    Calculate Scores
-                                </button>
-                            </form>
-                        </div>
-                    </div>
-                    
-                    <!-- Right Column: Batch Processing -->
-                    <div>
-                        <div class="info-box">
-                            <strong>Batch Processing (CSV):</strong> Upload a CSV file to calculate scores for multiple subjects 
-                            at once. Perfect for research studies.
-                        </div>
-                        
-                        <div class="input-section">
-                            <h2>Batch Score Calculator</h2>
-                            
-                            <h4 style="color: #1e3c72; margin-bottom: 10px;">CSV Format Requirements:</h4>
-                            <p style="font-size: 0.9em; margin-bottom: 10px;">Your CSV must have these exact column headers:</p>
-                            
-                            <ul style="font-size: 0.85em; margin-left: 20px; margin-bottom: 15px;">
-                                <li><strong>subject_id</strong> - Unique identifier</li>
-                                <li><strong>maternal_age</strong> - Values: "over25" or "25orless"</li>
-                                <li><strong>education</strong> - Values: "graduate", "college", or "highschool"</li>
-                                <li><strong>income</strong> - Values: "middlehigh" or "low"</li>
-                                <li><strong>employment</strong> - Values: "employed", "homecare", or "unemployed"</li>
-                                <li><strong>family</strong> - Values: "married", "cohabiting", or "single"</li>
-                            </ul>
-                            
-                            <div class="csv-format">subject_id,maternal_age,education,income,employment,family
+          </div>
+
+          <!-- Right column: Batch -->
+          <div>
+            <div class="info-box">
+              <strong>Batch Processing (CSV):</strong> Upload a CSV file to calculate scores for multiple subjects at once.
+            </div>
+
+            <div class="input-section">
+              <h2>Batch Score Calculator</h2>
+
+              <h4 style="color:#1e3c72;margin-bottom:10px;">CSV Format Requirements:</h4>
+              <p style="font-size:0.9em;margin-bottom:10px;">Your CSV must have these exact column headers:</p>
+
+              <ul style="font-size:0.85em;margin-left:20px;margin-bottom:15px;">
+                <li><strong>subject_id</strong> – Unique identifier</li>
+                <li><strong>maternal_age</strong> – “over25” or “25orless”</li>
+                <li><strong>education</strong> – “graduate”, “college”, or “highschool”</li>
+                <li><strong>income</strong> – “middlehigh” or “low”</li>
+                <li><strong>employment</strong> – “employed”, “homecare”, or “unemployed”</li>
+                <li><strong>family</strong> – “married”, “cohabiting”, or “single”</li>
+              </ul>
+
+              <div class="csv-format">subject_id,maternal_age,education,income,employment,family
 001,over25,graduate,middlehigh,employed,married
 002,25orless,highschool,low,unemployed,single
 003,over25,college,middlehigh,homecare,cohabiting</div>
-                            
-                            <div style="margin: 20px 0;">
-                                <label class="file-upload-btn">
-                                    📁 Choose CSV File
-                                    <input type="file" id="csv-upload" accept=".csv" onchange="handleFileUpload(event)">
-                                </label>
-                            </div>
-                            
-                            <div id="file-info" style="display: none; margin-bottom: 15px; padding: 10px; background: #e7f3ff; border-radius: 5px;">
-                                <strong>File loaded:</strong> <span id="file-name"></span><br>
-                                <strong>Subjects:</strong> <span id="subject-count"></span>
-                            </div>
-                            
-                            <button type="button" class="calculate-btn" id="batch-calculate" onclick="calculateBatch()" style="display: none;">
-                                Process Batch Scores
-                            </button>
-                            
-                            <div id="batch-results" style="display: none; margin-top: 20px;">
-                                <div style="padding: 15px; background: #d4edda; border-radius: 5px; margin-bottom: 15px;">
-                                    <strong style="color: #155724;">✓ Processing Complete!</strong><br>
-                                    <span id="batch-summary" style="font-size: 0.9em;"></span>
-                                </div>
-                                <button class="download-btn" onclick="downloadResults()">
-                                    📥 Download Results CSV
-                                </button>
-                            </div>
-                        </div>
-                    </div>
+
+              <div style="margin:20px 0;">
+                <label class="file-upload-btn">
+                  📁 Choose CSV File
+                  <input type="file" id="csv-upload" accept=".csv" onchange="handleFileUpload(event)" />
+                </label>
+              </div>
+
+              <div id="file-info" style="display:none;margin-bottom:15px;padding:10px;background:#e7f3ff;border-radius:5px;">
+                <strong>File loaded:</strong> <span id="file-name"></span><br />
+                <strong>Subjects:</strong> <span id="subject-count"></span>
+              </div>
+
+              <button type="button" class="calculate-btn" id="batch-calculate" onclick="calculateBatch()" style="display:none;">
+                Process Batch Scores
+              </button>
+
+              <div id="batch-results" style="display:none;margin-top:20px;">
+                <div style="padding:15px;background:#d4edda;border-radius:5px;margin-bottom:15px;">
+                  <strong style="color:#155724;">✓ Processing Complete!</strong><br />
+                  <span id="batch-summary" style="font-size:0.9em;"></span>
                 </div>
-                
-                <!-- Results for single subject (appears below) -->
-                <div id="results-wrapper" class="results-wrapper">
-                    <div class="results-grid">
-                        <!-- MCA Model Results -->
-                        <div class="result-card">
-                            <h3>MCA Model (Unsupervised)</h3>
-                            <div class="score-range-info">
-                                Range: -2.2 to 0.00 (includes CI range)
-                            </div>
-                            <div class="score-display" id="mca-score"></div>
-                            <div class="score-ci" id="mca-ci"></div>
-                            
-                            <div class="score-range-container">
-                                <div class="score-range-bar">
-                                    <div id="mca-ci-lower" class="ci-line lower"></div>
-                                    <div id="mca-ci-upper" class="ci-line upper"></div>
-                                    <div id="mca-indicator" class="score-indicator"></div>
-                                    <div class="reference-line"></div>
-                                </div>
-                                <div class="range-labels">
-                                    <span>-2.2</span>
-                                    <span>0</span>
-                                </div>
-                            </div>
-                            
-                            <div class="stat-value">
-                                <span class="stat-label">Percentile:</span> 
-                                <span id="mca-percentile"></span>
-                            </div>
-                            
-                            <div class="stat-value">
-                                <span class="stat-label">Interpretation:</span> 
-                                <span id="mca-interpretation"></span>
-                            </div>
-                        </div>
-                        
-                        <!-- Ridge Model Results -->
-                        <div class="result-card">
-                            <h3>Ridge Model (Supervised)</h3>
-                            <div class="score-range-info">
-                                Range: -30 to 0.00 (includes CI range)
-                            </div>
-                            <div class="score-display" id="ridge-score"></div>
-                            <div class="score-ci" id="ridge-ci"></div>
-                            
-                            <div class="score-range-container">
-                                <div class="score-range-bar">
-                                    <div id="ridge-ci-lower" class="ci-line lower"></div>
-                                    <div id="ridge-ci-upper" class="ci-line upper"></div>
-                                    <div id="ridge-indicator" class="score-indicator"></div>
-                                    <div class="reference-line"></div>
-                                </div>
-                                <div class="range-labels">
-                                    <span>-30</span>
-                                    <span>0</span>
-                                </div>
-                            </div>
-                            
-                            <div class="stat-value">
-                                <span class="stat-label">Percentile:</span> 
-                                <span id="ridge-percentile"></span>
-                            </div>
-                            
-                            <div class="stat-value">
-                                <span class="stat-label">Interpretation:</span> 
-                                <span id="ridge-interpretation"></span>
-                            </div>
-                        </div>
-                    </div>
-                    
-                    <button class="print-btn" onclick="window.print()">Print Results</button>
-                </div>
+                <button class="download-btn" onclick="downloadResults()">📥 Download Results CSV</button>
+              </div>
             </div>
+          </div>
         </div>
-        
-        <div class="footer">
-            <div class="footer-content">
-                <div class="footer-left">
-                    <p>Developed by Abiot Y. Derbie, PhD</p>
-                    <p>For research and clinical assessment purposes</p>
+
+        <!-- Single subject results -->
+        <div id="results-wrapper" class="results-wrapper" aria-live="polite">
+          <div class="results-grid">
+            <!-- MCA -->
+            <div class="result-card">
+              <h3>MCA Model (Unsupervised)</h3>
+              <div class="score-range-info">Range: -2.2 to 0.00 (includes CI range)</div>
+              <div class="score-display" id="mca-score"></div>
+              <div class="score-ci" id="mca-ci"></div>
+
+              <div class="score-range-container">
+                <div class="score-range-bar">
+                  <div id="mca-ci-lower" class="ci-line lower"></div>
+                  <div id="mca-ci-upper" class="ci-line upper"></div>
+                  <div id="mca-indicator" class="score-indicator"></div>
+                  <div class="reference-line"></div>
                 </div>
-                <div class="footer-right">
-                    <p><strong>Principal Investigator:</strong></p>
-                    <p>Nehal A. Parikh, DO, MS</p>
-                    <p>Email: nehal.parikh@cchmc.org</p>
-                </div>
+                <div class="range-labels"><span>-2.2</span><span>0</span></div>
+              </div>
+
+              <div class="stat-value"><span class="stat-label">Percentile:</span> <span id="mca-percentile"></span></div>
+              <div class="stat-value"><span class="stat-label">Interpretation:</span> <span id="mca-interpretation"></span></div>
             </div>
+
+            <!-- Ridge -->
+            <div class="result-card">
+              <h3>Ridge Model (Supervised)</h3>
+              <div class="score-range-info">Range: -30 to 0.00 (includes CI range)</div>
+              <div class="score-display" id="ridge-score"></div>
+              <div class="score-ci" id="ridge-ci"></div>
+
+              <div class="score-range-container">
+                <div class="score-range-bar">
+                  <div id="ridge-ci-lower" class="ci-line lower"></div>
+                  <div id="ridge-ci-upper" class="ci-line upper"></div>
+                  <div id="ridge-indicator" class="score-indicator"></div>
+                  <div class="reference-line"></div>
+                </div>
+                <div class="range-labels"><span>-30</span><span>0</span></div>
+              </div>
+
+              <div class="stat-value"><span class="stat-label">Percentile:</span> <span id="ridge-percentile"></span></div>
+              <div class="stat-value"><span class="stat-label">Interpretation:</span> <span id="ridge-interpretation"></span></div>
+            </div>
+          </div>
+
+          <button class="print-btn" onclick="window.print()">Print Results</button>
         </div>
-    </div>
-    
-    <script>
-        // Initialize visitor counter - Real global counter using CountAPI
-        window.addEventListener('DOMContentLoaded', function() {
-            // This counts ALL visitors to your site globally
-            fetch('https://api.countapi.xyz/hit/abioty.github.io-sdoh/visits')
-                .then(res => res.json())
-                .then(res => {
-                    document.getElementById('visitor-count').textContent = res.value.toLocaleString();
-                })
-                .catch(err => {
-                    // Fallback if the API is unavailable
-                    document.getElementById('visitor-count').textContent = 'N/A';
-                });
+      </section>
+    </main>
+
+    <footer class="footer">
+      <div class="footer-content">
+        <div class="footer-left">
+          <p>Developed by Abiot Y. Derbie, PhD</p>
+          <p>For research and clinical assessment purposes</p>
+        </div>
+        <div class="footer-right">
+          <p><strong>Principal Investigator:</strong></p>
+          <p>Nehal A. Parikh, DO, MS</p>
+          <p>Email: nehal.parikh@cchmc.org</p>
+        </div>
+      </div>
+    </footer>
+  </div>
+
+  <script>
+    /***************
+     * COUNTERS
+     ***************/
+    (function initCounters() {
+      // Device & Session counters (always work)
+      const deviceKey = 'sdoh_counter_device';
+      const sessionKey = 'sdoh_counter_session';
+
+      const deviceCount = (parseInt(localStorage.getItem(deviceKey), 10) || 0) + 1;
+      localStorage.setItem(deviceKey, String(deviceCount));
+      document.getElementById('visitor-count-device').textContent = deviceCount.toLocaleString();
+
+      const sessionCount = (parseInt(sessionStorage.getItem(sessionKey), 10) || 0) + 1;
+      sessionStorage.setItem(sessionKey, String(sessionCount));
+      document.getElementById('visitor-count-session').textContent = sessionCount.toLocaleString();
+
+      // Global counter via CountAPI (robust with timeout + fallback)
+      const NS = 'abioty_sdoh_ns';   // namespace
+      const KEY = 'perinatal_sdoh_v1'; // key
+      const url = `https://api.countapi.xyz/hit/${encodeURIComponent(NS)}/${encodeURIComponent(KEY)}`;
+
+      const controller = new AbortController();
+      const id = setTimeout(() => controller.abort(), 4000); // 4s timeout
+
+      fetch(url, { signal: controller.signal })
+        .then(res => res.ok ? res.json() : Promise.reject(new Error('HTTP ' + res.status)))
+        .then(json => {
+          clearTimeout(id);
+          const value = (json && typeof json.value === 'number') ? json.value : null;
+          document.getElementById('visitor-count-global').textContent =
+            value !== null ? value.toLocaleString() : '—';
+        })
+        .catch(() => {
+          clearTimeout(id);
+          // Fallback: synthesize a pseudo-global from device count so UI doesn't look broken
+          document.getElementById('visitor-count-global').textContent = '—';
         });
-        
-        // Model weights
-        const mcaWeights = {
-            'younger': -0.301,
-            'college': -0.183,
-            'hs': -0.301,
-            'low': -0.381,
-            'home': -0.043,
-            'unemployed': -0.332,
-            'cohabit': -0.140,
-            'single': -0.329
-        };
-        
-        const ridgeWeights = {
-            'younger': -2.137,
-            'college': -3.075,
-            'hs': -4.753,
-            'low': -6.221,
-            'home': -5.287,
-            'unemployed': -2.071,
-            'cohabit': -2.986,
-            'single': -1.317
-        };
-        
-        // CI data
-        const mcaCIs = {
-            'younger': { lower: -0.392, upper: -0.290 },
-            'college': { lower: -0.229, upper: -0.137 },
-            'hs': { lower: -0.485, upper: -0.437 },
-            'low': { lower: -0.559, upper: -0.515 },
-            'home': { lower: -0.009, upper: 0.101 },
-            'unemployed': { lower: -0.409, upper: -0.337 },
-            'cohabit': { lower: -0.211, upper: -0.114 },
-            'single': { lower: -0.424, upper: -0.363 }
-        };
-        
-        const ridgeCIs = {
-            'younger': { lower: -5.166, upper: 0.615 },
-            'college': { lower: -6.490, upper: 0.440 },
-            'hs': { lower: -7.919, upper: -1.633 },
-            'low': { lower: -8.938, upper: -3.283 },
-            'home': { lower: -8.707, upper: -2.206 },
-            'unemployed': { lower: -5.784, upper: 1.413 },
-            'cohabit': { lower: -6.483, upper: 0.020 },
-            'single': { lower: -4.684, upper: 1.806 }
-        };
-        
-        // Batch processing variables
-        let csvData = null;
-        let processedResults = null;
-        
-        // Tab switching
-        function showTab(tabName) {
-            const tabs = document.querySelectorAll('.tab-content');
-            tabs.forEach(tab => tab.classList.remove('active'));
-            
-            const navTabs = document.querySelectorAll('.nav-tab');
-            navTabs.forEach(tab => tab.classList.remove('active'));
-            
-            document.getElementById(tabName).classList.add('active');
-            event.target.classList.add('active');
+    })();
+
+    /***************
+     * TABS
+     ***************/
+    function showTab(tabName, btn) {
+      // content
+      document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
+      const panel = document.getElementById(tabName);
+      if (panel) panel.classList.add('active');
+
+      // buttons
+      document.querySelectorAll('.nav-tab').forEach(el => {
+        el.classList.remove('active');
+        el.setAttribute('aria-selected', 'false');
+      });
+      if (btn) {
+        btn.classList.add('active');
+        btn.setAttribute('aria-selected', 'true');
+      }
+    }
+
+    /***************
+     * MODEL PARAMS
+     ***************/
+    const mcaWeights = {
+      younger: -0.301,
+      college: -0.183,
+      hs: -0.301,
+      low: -0.381,
+      home: -0.043,
+      unemployed: -0.332,
+      cohabit: -0.140,
+      single: -0.329
+    };
+
+    const ridgeWeights = {
+      younger: -2.137,
+      college: -3.075,
+      hs: -4.753,
+      low: -6.221,
+      home: -5.287,
+      unemployed: -2.071,
+      cohabit: -2.986,
+      single: -1.317
+    };
+
+    const mcaCIs = {
+      younger: { lower: -0.392, upper: -0.290 },
+      college: { lower: -0.229, upper: -0.137 },
+      hs: { lower: -0.485, upper: -0.437 },
+      low: { lower: -0.559, upper: -0.515 },
+      home: { lower: -0.009, upper: 0.101 },
+      unemployed: { lower: -0.409, upper: -0.337 },
+      cohabit: { lower: -0.211, upper: -0.114 },
+      single: { lower: -0.424, upper: -0.363 }
+    };
+
+    const ridgeCIs = {
+      younger: { lower: -5.166, upper: 0.615 },
+      college: { lower: -6.490, upper: 0.440 },
+      hs: { lower: -7.919, upper: -1.633 },
+      low: { lower: -8.938, upper: -3.283 },
+      home: { lower: -8.707, upper: -2.206 },
+      unemployed: { lower: -5.784, upper: 1.413 },
+      cohabit: { lower: -6.483, upper: 0.020 },
+      single: { lower: -4.684, upper: 1.806 }
+    };
+
+    /***************
+     * UTILITIES
+     ***************/
+    function calculateCompositeCI(selectedVars, ciData) {
+      let sumSq = 0;
+      selectedVars.forEach(k => {
+        const ci = ciData[k];
+        if (ci) {
+          const half = (ci.upper - ci.lower) / 2;
+          sumSq += half * half;
         }
-        
-        // Calculate composite CI
-        function calculateCompositeCI(selectedVars, ciData) {
-            let sumOfSquares = 0;
-            selectedVars.forEach(varKey => {
-                if (ciData[varKey]) {
-                    const halfWidth = (ciData[varKey].upper - ciData[varKey].lower) / 2;
-                    sumOfSquares += halfWidth * halfWidth;
-                }
-            });
-            return Math.sqrt(sumOfSquares);
+      });
+      return Math.sqrt(sumSq);
+    }
+
+    function clamp01(x) { return Math.max(0, Math.min(1, x)); }
+
+    function updateVisualization(model, score, lowerCI, upperCI, minScore, maxScore) {
+      const span = maxScore - minScore;
+      const pos = clamp01((score - minScore) / span) * 100;
+      const lpos = clamp01((lowerCI - minScore) / span) * 100;
+      const upos = clamp01((upperCI - minScore) / span) * 100;
+
+      const ind = document.getElementById(`${model}-indicator`);
+      const lci = document.getElementById(`${model}-ci-lower`);
+      const uci = document.getElementById(`${model}-ci-upper`);
+      if (ind) {
+        ind.style.left = pos + '%';
+        ind.setAttribute('data-score', score.toFixed(2));
+      }
+      if (lci) lci.style.left = lpos + '%';
+      if (uci) uci.style.left = upos + '%';
+    }
+
+    function calculateMCAPercentile(score) {
+      if (score <= -1.8) return Math.max(1, 3 + (score + 2.2) * 5);
+      if (score <= -1.4) return 5 + ((score + 1.8) * 12.5);
+      if (score <= -1.0) return 10 + ((score + 1.4) * 12.5);
+      if (score <= -0.6) return 15 + ((score + 1.0) * 25);
+      if (score <= -0.3) return 25 + ((score + 0.6) * 50);
+      if (score <= 0) return 40 + ((score + 0.3) * 150);
+      return 85;
+    }
+
+    function calculateRidgePercentile(score) {
+      if (score <= -25) return Math.max(1, 3 + (score + 30) * 0.4);
+      if (score <= -20) return 5 + ((score + 25) * 1);
+      if (score <= -15) return 10 + ((score + 20) * 3);
+      if (score <= -10) return 25 + ((score + 15) * 3);
+      if (score <= -5) return 40 + ((score + 10) * 3);
+      if (score <= 0) return 55 + ((score + 5) * 6);
+      return 85;
+    }
+
+    function getInterpretation(percentile) {
+      if (percentile <= 33) return "Higher social risk. Enhanced follow-up and support services recommended.";
+      if (percentile <= 66) return "Moderate social risk. Standard follow-up with attention to social resources.";
+      return "Lower social risk. Continue routine monitoring.";
+    }
+
+    /***************
+     * SINGLE SUBJECT
+     ***************/
+    function calculateScores() {
+      const form = document.getElementById('sdoh-form');
+      if (!form.checkValidity()) {
+        alert('Please complete all fields before calculating.');
+        return;
+      }
+
+      const fd = new FormData(form);
+      const selectedVars = [];
+      let mca = 0, ridge = 0;
+
+      for (const [, value] of fd.entries()) {
+        if (value !== '0') {
+          selectedVars.push(value);
+          if (mcaWeights[value]) mca += mcaWeights[value];
+          if (ridgeWeights[value]) ridge += ridgeWeights[value];
         }
-        
-        // Single subject calculation
-        function calculateScores() {
-            const form = document.getElementById('sdoh-form');
-            
-            if (!form.checkValidity()) {
-                alert('Please complete all fields before calculating.');
-                return;
-            }
-            
-            // Get form values
-            const formData = new FormData(form);
-            const selectedVars = [];
-            let mcaScore = 0;
-            let ridgeScore = 0;
-            
-            // Process each variable
-            for (let [name, value] of formData) {
-                if (value !== '0') {
-                    selectedVars.push(value);
-                    if (mcaWeights[value]) mcaScore += mcaWeights[value];
-                    if (ridgeWeights[value]) ridgeScore += ridgeWeights[value];
-                }
-            }
-            
-            // Calculate CIs
-            const mcaCIHalfWidth = calculateCompositeCI(selectedVars, mcaCIs);
-            const mcaLowerCI = mcaScore - mcaCIHalfWidth;
-            const mcaUpperCI = mcaScore + mcaCIHalfWidth;
-            
-            const ridgeCIHalfWidth = calculateCompositeCI(selectedVars, ridgeCIs);
-            const ridgeLowerCI = ridgeScore - ridgeCIHalfWidth;
-            const ridgeUpperCI = ridgeScore + ridgeCIHalfWidth;
-            
-            // Calculate percentiles
-            const mcaPercentile = calculateMCAPercentile(mcaScore);
-            const ridgePercentile = calculateRidgePercentile(ridgeScore);
-            
-            // Generate interpretations
-            const mcaInterpretation = getInterpretation(mcaPercentile);
-            const ridgeInterpretation = getInterpretation(ridgePercentile);
-            
-            // Display MCA results
-            document.getElementById('mca-score').textContent = mcaScore.toFixed(2);
-            document.getElementById('mca-ci').textContent = `95% CI: [${mcaLowerCI.toFixed(2)}, ${mcaUpperCI.toFixed(2)}]`;
-            document.getElementById('mca-percentile').textContent = mcaPercentile.toFixed(0) + 'th percentile';
-            document.getElementById('mca-interpretation').textContent = mcaInterpretation;
-            
-            // Display Ridge results
-            document.getElementById('ridge-score').textContent = ridgeScore.toFixed(2);
-            document.getElementById('ridge-ci').textContent = `95% CI: [${ridgeLowerCI.toFixed(2)}, ${ridgeUpperCI.toFixed(2)}]`;
-            document.getElementById('ridge-percentile').textContent = ridgePercentile.toFixed(0) + 'th percentile';
-            document.getElementById('ridge-interpretation').textContent = ridgeInterpretation;
-            
-            // Update visualizations with extended ranges for CI
-            updateVisualization('mca', mcaScore, mcaLowerCI, mcaUpperCI, -2.2, 0);
-            updateVisualization('ridge', ridgeScore, ridgeLowerCI, ridgeUpperCI, -30, 0);
-            
-            // Show results
-            document.getElementById('results-wrapper').style.display = 'block';
-            document.getElementById('results-wrapper').scrollIntoView({ behavior: 'smooth' });
-        }
-        
-        // Update visualization
-        function updateVisualization(model, score, lowerCI, upperCI, minScore, maxScore) {
-            const position = ((score - minScore) / (maxScore - minScore)) * 100;
-            const ciLowerPos = ((lowerCI - minScore) / (maxScore - minScore)) * 100;
-            const ciUpperPos = ((upperCI - minScore) / (maxScore - minScore)) * 100;
-            
-            document.getElementById(`${model}-indicator`).style.left = Math.max(0, Math.min(100, position)) + '%';
-            document.getElementById(`${model}-indicator`).setAttribute('data-score', score.toFixed(2));
-            document.getElementById(`${model}-ci-lower`).style.left = Math.max(0, Math.min(100, ciLowerPos)) + '%';
-            document.getElementById(`${model}-ci-upper`).style.left = Math.max(0, Math.min(100, ciUpperPos)) + '%';
-        }
-        
-        // Batch processing functions
-        function handleFileUpload(event) {
-            const file = event.target.files[0];
-            if (!file) return;
-            
-            const reader = new FileReader();
-            reader.onload = function(e) {
-                const text = e.target.result;
-                parseCSV(text);
-                
-                // Show file info
-                document.getElementById('file-name').textContent = file.name;
-                document.getElementById('file-info').style.display = 'block';
-                document.getElementById('batch-calculate').style.display = 'block';
-                document.getElementById('batch-results').style.display = 'none';
-            };
-            reader.readAsText(file);
-        }
-        
-        function parseCSV(text) {
-            const lines = text.trim().split('\n');
-            const headers = lines[0].toLowerCase().split(',').map(h => h.trim());
-            
-            // Validate headers
-            const requiredHeaders = ['subject_id', 'maternal_age', 'education', 'income', 'employment', 'family'];
-            const missingHeaders = requiredHeaders.filter(h => !headers.includes(h));
-            
-            if (missingHeaders.length > 0) {
-                alert('Missing required columns: ' + missingHeaders.join(', '));
-                return;
-            }
-            
-            // Parse data rows
-            csvData = [];
-            for (let i = 1; i < lines.length; i++) {
-                const values = lines[i].split(',').map(v => v.trim());
-                if (values.length === headers.length) {
-                    const row = {};
-                    headers.forEach((header, index) => {
-                        row[header] = values[index];
-                    });
-                    csvData.push(row);
-                }
-            }
-            
-            document.getElementById('subject-count').textContent = csvData.length;
-        }
-        
-        function calculateBatch() {
-            if (!csvData || csvData.length === 0) {
-                alert('Please upload a valid CSV file first.');
-                return;
-            }
-            
-            processedResults = [];
-            
-            csvData.forEach(subject => {
-                // Map CSV values to calculator values
-                const mappedData = mapCSVToWeights(subject);
-                
-                // Calculate scores
-                let mcaScore = 0;
-                let ridgeScore = 0;
-                const selectedVars = [];
-                
-                // Process each variable
-                Object.keys(mappedData).forEach(key => {
-                    const value = mappedData[key];
-                    if (value && value !== '0') {
-                        selectedVars.push(value);
-                        if (mcaWeights[value]) mcaScore += mcaWeights[value];
-                        if (ridgeWeights[value]) ridgeScore += ridgeWeights[value];
-                    }
-                });
-                
-                // Calculate CIs
-                const mcaCIHalfWidth = calculateCompositeCI(selectedVars, mcaCIs);
-                const ridgeCIHalfWidth = calculateCompositeCI(selectedVars, ridgeCIs);
-                
-                // Calculate percentiles
-                const mcaPercentile = calculateMCAPercentile(mcaScore);
-                const ridgePercentile = calculateRidgePercentile(ridgeScore);
-                
-                // Store results
-                processedResults.push({
-                    subject_id: subject.subject_id,
-                    maternal_age: subject.maternal_age,
-                    education: subject.education,
-                    income: subject.income,
-                    employment: subject.employment,
-                    family: subject.family,
-                    mca_score: mcaScore.toFixed(2),
-                    mca_ci_lower: (mcaScore - mcaCIHalfWidth).toFixed(2),
-                    mca_ci_upper: (mcaScore + mcaCIHalfWidth).toFixed(2),
-                    mca_percentile: mcaPercentile.toFixed(0),
-                    ridge_score: ridgeScore.toFixed(2),
-                    ridge_ci_lower: (ridgeScore - ridgeCIHalfWidth).toFixed(2),
-                    ridge_ci_upper: (ridgeScore + ridgeCIHalfWidth).toFixed(2),
-                    ridge_percentile: ridgePercentile.toFixed(0)
-                });
-            });
-            
-            // Show results summary
-            document.getElementById('batch-summary').textContent = 
-                `Calculated scores for ${processedResults.length} subjects successfully.`;
-            document.getElementById('batch-results').style.display = 'block';
-        }
-        
-        function mapCSVToWeights(subject) {
-            const mapped = {};
-            
-            // Maternal age
-            if (subject.maternal_age === '25orless') mapped.age = 'younger';
-            else if (subject.maternal_age === 'over25') mapped.age = '0';
-            
-            // Education
-            if (subject.education === 'graduate') mapped.education = '0';
-            else if (subject.education === 'college') mapped.education = 'college';
-            else if (subject.education === 'highschool') mapped.education = 'hs';
-            
-            // Income
-            if (subject.income === 'middlehigh') mapped.income = '0';
-            else if (subject.income === 'low') mapped.income = 'low';
-            
-            // Employment
-            if (subject.employment === 'employed') mapped.employment = '0';
-            else if (subject.employment === 'homecare') mapped.employment = 'home';
-            else if (subject.employment === 'unemployed') mapped.employment = 'unemployed';
-            
-            // Family
-            if (subject.family === 'married') mapped.family = '0';
-            else if (subject.family === 'cohabiting') mapped.family = 'cohabit';
-            else if (subject.family === 'single') mapped.family = 'single';
-            
-            return mapped;
-        }
-        
-        function downloadResults() {
-            if (!processedResults || processedResults.length === 0) return;
-            
-            // Create CSV content
-            const headers = Object.keys(processedResults[0]).join(',');
-            const rows = processedResults.map(row => Object.values(row).join(','));
-            const csvContent = headers + '\n' + rows.join('\n');
-            
-            // Create download link
-            const blob = new Blob([csvContent], { type: 'text/csv' });
-            const url = window.URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = 'sdoh_scores_results.csv';
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            window.URL.revokeObjectURL(url);
-        }
-        
-        // Percentile calculations
-        function calculateMCAPercentile(score) {
-            // Adjusted for extended CI range: -2.2 to 0
-            // Maximum actual score is -1.64, but CI can extend to -2.2
-            if (score <= -1.8) return Math.max(1, 3 + (score + 2.2) * 5);
-            if (score <= -1.4) return 5 + ((score + 1.8) * 12.5);
-            if (score <= -1.0) return 10 + ((score + 1.4) * 12.5);
-            if (score <= -0.6) return 15 + ((score + 1.0) * 25);
-            if (score <= -0.3) return 25 + ((score + 0.6) * 50);
-            if (score <= 0) return 40 + ((score + 0.3) * 150);
-            return 85;
-        }
-        
-        function calculateRidgePercentile(score) {
-            // Adjusted for extended CI range: -30 to 0
-            // Maximum actual score is -21.38, but CI can extend to -30
-            if (score <= -25) return Math.max(1, 3 + (score + 30) * 0.4);
-            if (score <= -20) return 5 + ((score + 25) * 1);
-            if (score <= -15) return 10 + ((score + 20) * 3);
-            if (score <= -10) return 25 + ((score + 15) * 3);
-            if (score <= -5) return 40 + ((score + 10) * 3);
-            if (score <= 0) return 55 + ((score + 5) * 6);
-            return 85;
-        }
-        
-        // Get interpretation
-        function getInterpretation(percentile) {
-            if (percentile <= 33) {
-                return "Higher social risk. Enhanced follow-up and support services recommended.";
-            } else if (percentile <= 66) {
-                return "Moderate social risk. Standard follow-up with attention to social resources.";
-            } else {
-                return "Lower social risk. Continue routine monitoring.";
-            }
-        }
-    </script>
+      }
+
+      const mcaCIHalf = calculateCompositeCI(selectedVars, mcaCIs);
+      const ridgeCIHalf = calculateCompositeCI(selectedVars, ridgeCIs);
+
+      const mcaLow = mca - mcaCIHalf, mcaHigh = mca + mcaCIHalf;
+      const ridgeLow = ridge - ridgeCIHalf, ridgeHigh = ridge + ridgeCIHalf;
+
+      const mcaPct = calculateMCAPercentile(mca);
+      const ridgePct = calculateRidgePercentile(ridge);
+
+      document.getElementById('mca-score').textContent = mca.toFixed(2);
+      document.getElementById('mca-ci').textContent = `95% CI: [${mcaLow.toFixed(2)}, ${mcaHigh.toFixed(2)}]`;
+      document.getElementById('mca-percentile').textContent = `${mcaPct.toFixed(0)}th percentile`;
+      document.getElementById('mca-interpretation').textContent = getInterpretation(mcaPct);
+
+      document.getElementById('ridge-score').textContent = ridge.toFixed(2);
+      document.getElementById('ridge-ci').textContent = `95% CI: [${ridgeLow.toFixed(2)}, ${ridgeHigh.toFixed(2)}]`;
+      document.getElementById('ridge-percentile').textContent = `${ridgePct.toFixed(0)}th percentile`;
+      document.getElementById('ridge-interpretation').textContent = getInterpretation(ridgePct);
+
+      updateVisualization('mca', mca, mcaLow, mcaHigh, -2.2, 0);
+      updateVisualization('ridge', ridge, ridgeLow, ridgeHigh, -30, 0);
+
+      const wrap = document.getElementById('results-wrapper');
+      wrap.style.display = 'block';
+      wrap.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+
+    /***************
+     * BATCH
+     ***************/
+    let csvData = null;
+    let processedResults = null;
+
+    function handleFileUpload(e) {
+      const file = e.target.files && e.target.files[0];
+      if (!file) return;
+
+      const reader = new FileReader();
+      reader.onload = function (ev) {
+        parseCSV(String(ev.target.result || ''));
+        document.getElementById('file-name').textContent = file.name;
+        document.getElementById('file-info').style.display = 'block';
+        document.getElementById('batch-calculate').style.display = 'block';
+        document.getElementById('batch-results').style.display = 'none';
+      };
+      reader.readAsText(file);
+    }
+
+    function parseCSV(text) {
+      const lines = text.replace(/\r/g, '').trim().split('\n').filter(Boolean);
+      if (lines.length < 2) {
+        alert('CSV has no data rows.');
+        csvData = [];
+        document.getElementById('subject-count').textContent = '0';
+        return;
+      }
+      const headers = lines[0].toLowerCase().split(',').map(h => h.trim());
+      const required = ['subject_id','maternal_age','education','income','employment','family'];
+      const missing = required.filter(h => !headers.includes(h));
+      if (missing.length) {
+        alert('Missing required columns: ' + missing.join(', '));
+        csvData = [];
+        document.getElementById('subject-count').textContent = '0';
+        return;
+      }
+
+      const data = [];
+      for (let i = 1; i < lines.length; i++) {
+        const row = lines[i].split(',').map(v => v.trim());
+        if (row.length !== headers.length) continue;
+        const rec = {};
+        headers.forEach((h, idx) => { rec[h] = row[idx]; });
+        data.push(rec);
+      }
+      csvData = data;
+      document.getElementById('subject-count').textContent = data.length.toString();
+    }
+
+    function mapCSVToWeights(subject) {
+      const mapped = {};
+      mapped.age = subject.maternal_age === '25orless' ? 'younger' : '0';
+      mapped.education =
+        subject.education === 'graduate' ? '0' :
+        subject.education === 'college' ? 'college' :
+        subject.education === 'highschool' ? 'hs' : '0';
+      mapped.income = subject.income === 'low' ? 'low' : '0';
+      mapped.employment =
+        subject.employment === 'homecare' ? 'home' :
+        subject.employment === 'unemployed' ? 'unemployed' : '0';
+      mapped.family =
+        subject.family === 'cohabiting' ? 'cohabit' :
+        subject.family === 'single' ? 'single' : '0';
+      return mapped;
+    }
+
+    function calculateBatch() {
+      if (!csvData || csvData.length === 0) {
+        alert('Please upload a valid CSV file first.');
+        return;
+      }
+      processedResults = [];
+
+      csvData.forEach(subject => {
+        const mapped = mapCSVToWeights(subject);
+        const selected = [];
+        let mca = 0, ridge = 0;
+
+        Object.keys(mapped).forEach(k => {
+          const v = mapped[k];
+          if (v && v !== '0') {
+            selected.push(v);
+            if (mcaWeights[v]) mca += mcaWeights[v];
+            if (ridgeWeights[v]) ridge += ridgeWeights[v];
+          }
+        });
+
+        const mcaHalf = calculateCompositeCI(selected, mcaCIs);
+        const ridgeHalf = calculateCompositeCI(selected, ridgeCIs);
+
+        const mcaPct = calculateMCAPercentile(mca);
+        const ridgePct = calculateRidgePercentile(ridge);
+
+        processedResults.push({
+          subject_id: subject.subject_id,
+          maternal_age: subject.maternal_age,
+          education: subject.education,
+          income: subject.income,
+          employment: subject.employment,
+          family: subject.family,
+          mca_score: mca.toFixed(2),
+          mca_ci_lower: (mca - mcaHalf).toFixed(2),
+          mca_ci_upper: (mca + mcaHalf).toFixed(2),
+          mca_percentile: mcaPct.toFixed(0),
+          ridge_score: ridge.toFixed(2),
+          ridge_ci_lower: (ridge - ridgeHalf).toFixed(2),
+          ridge_ci_upper: (ridge + ridgeHalf).toFixed(2),
+          ridge_percentile: ridgePct.toFixed(0)
+        });
+      });
+
+      document.getElementById('batch-summary').textContent =
+        `Calculated scores for ${processedResults.length} subjects successfully.`;
+      document.getElementById('batch-results').style.display = 'block';
+    }
+
+    function downloadResults() {
+      if (!processedResults || processedResults.length === 0) return;
+
+      const headers = Object.keys(processedResults[0]);
+      const csv = [
+        headers.join(','),
+        ...processedResults.map(row => headers.map(h => String(row[h]).replaceAll(',', ';')).join(','))
+      ].join('\n');
+
+      const blob = new Blob([csv], { type: 'text/csv' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'sdoh_scores_results.csv';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }
+  </script>
 </body>
 </html>
